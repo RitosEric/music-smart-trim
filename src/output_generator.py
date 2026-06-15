@@ -4,8 +4,34 @@ import numpy as np
 import soundfile as sf
 import json
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any
 from src.trim_engine import TrimStrategy
+
+
+def _convert_to_serializable(obj: Any) -> Any:
+    """
+    Convert numpy types to Python native types for JSON serialization.
+
+    Args:
+        obj: Object to convert (can be dict, list, numpy type, or primitive)
+
+    Returns:
+        Object with numpy types converted to Python types
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: _convert_to_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_to_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_convert_to_serializable(item) for item in obj)
+    else:
+        return obj
 
 
 def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]) -> np.ndarray:
@@ -245,6 +271,9 @@ def generate_outputs(
         'processing_time': processing_time,
         'options': rendered_outputs
     }
+
+    # Convert numpy types to Python types for JSON serialization
+    summary_data = _convert_to_serializable(summary_data)
 
     summary_json_path = output_dir / "summary.json"
     with open(summary_json_path, 'w') as f:
