@@ -20,6 +20,18 @@ Music Smart Trim is a Python-based tool that intelligently adjusts background mu
 
 ## System Architecture
 
+### Design Principle: Web-Ready Architecture
+
+The system is designed with clean module separation to support future web deployment without refactoring core logic:
+
+- **Core modules** (`audio_loader`, `spectral_analyzer`, `segment_matcher`, `trim_engine`, `quality_scorer`, `output_generator`) contain pure processing logic with no CLI dependencies
+- **CLI wrapper** (`cli.py`) handles only command-line interaction and orchestration
+- **Clean interfaces:** Each module accepts standard Python types (arrays, dicts) and returns structured data, not CLI-specific formats
+- **State management:** Processing state can be serialized (for web sessions) via the metadata outputs
+- **Future web backend** can import and use the same core modules, replacing only the CLI wrapper with HTTP endpoints
+
+This architecture ensures the engine can be deployed as a web service by adding a Flask/FastAPI wrapper without touching the core processing pipeline.
+
 ### Pipeline Flow
 
 ```
