@@ -4,183 +4,183 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Music Smart Trim intelligently adjusts background music to target length by detecting and manipulating repeated melodic sections using spectral analysis.
+Music Smart Trim intelligently shortens music to target length using spectral analysis, section-aware cutting with chorus preservation, and optional MERT embeddings for quality assessment (V7).
 
-## Development Commands
+## Setup
 
-### Run Tests
+**Dependencies:**
 ```bash
-pytest tests/ -v                              # All tests
-pytest tests/test_audio_loader.py -v          # Specific module
-pytest tests/ --cov=src --cov-report=term     # With coverage
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Or install as editable package (avoids PYTHONPATH prefix)
+pip install -e .
 ```
 
-### Run CLI
+**System Requirements:**
+- Python 3.8+
+- FFmpeg (required for audio processing): `brew install ffmpeg` on macOS
+
+## Quick Commands
+
 ```bash
-python src/cli.py --input song.mp3 --target 120
-python src/cli.py --input song.mp3 --target 120 --protect "0:30-1:15"
+# Run (basic)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 120
+
+# Run (with MERT embeddings for better quality - recommended)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert
+
+# Run (with protected regions)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --protect "0:00-0:30" "3:00-3:30"
+
+# Run all tests
+pytest tests/ -v
+
+# Run single test file
+pytest tests/test_audio_loader.py -v
+
+# Clean output directories
+rm -rf output* __pycache__ .pytest_cache
 ```
 
-### Generate Test Fixtures
-```bash
-# 30-second test file
-python -c "
-import numpy as np, soundfile as sf
-sr = 22050; t = np.linspace(0, 30, sr * 30)
-audio = np.concatenate([np.sin(2*np.pi*440*t[:sr*10]), np.sin(2*np.pi*523*t[:sr*10]), np.sin(2*np.pi*440*t[:sr*10])])
-sf.write('tests/fixtures/sample_30s.wav', audio * 0.3, sr)
-"
+**Note:** CLI includes interactive regeneration loop - after generating top 3 options (from 10 candidates), prompts "Generate alternative options? (y/n)" to try different strategies with exclusion of previously shown options.
 
-# 3-minute test file
-python -c "
-import numpy as np, soundfile as sf
-sr = 22050; t = np.linspace(0, 30, sr * 30)
-melody = np.concatenate([np.sin(2*np.pi*440*t), np.sin(2*np.pi*523*t), np.sin(2*np.pi*440*t), 
-                         np.sin(2*np.pi*523*t), np.sin(2*np.pi*587*t), np.sin(2*np.pi*440*t)])
-sf.write('tests/fixtures/sample_3min.wav', melody * 0.3, sr)
-"
-```
-
-## Architecture
-
-**6-stage pipeline with 7 modules:**
+## Architecture (7-Stage Pipeline, 8 Modules)
 
 ```
-Audio (MP3/WAV/FLAC/M4A/OGG)
-  ↓ audio_loader: Load, normalize to 22050Hz mono, validate size
-  ↓ spectral_analyzer: Extract chroma, build SSM, detect repetitions
-  ↓ segment_matcher: Parse protected regions, filter, cluster
-  ↓ trim_engine: Generate 3 strategies (conservative/balanced/aggressive)
-  ↓ quality_scorer: Rate on 100pt scale (40% transition, 40% coherence, 20% length)
-  ↓ output_generator: Render audio, save with metadata
-  ↓ cli: Orchestrate pipeline, ensure ≥4.5★, handle regeneration
+Audio → audio_loader → spectral_analyzer → structure_analyzer
+  → segment_matcher → trim_engine → quality_scorer → output_generator → CLI
 ```
 
-## Module Interfaces
+**Modules:**
+- `audio_loader`: Load, normalize to 22050Hz mono
+- `spectral_analyzer`: Detect repetitions (SSM, min 15s, threshold 0.75)
+- `structure_analyzer`: Detect beats, tempo, label sections (intro/verse/chorus/bridge/outro) with repetition counts (V7)
+- `segment_matcher`: Cluster and filter segments
+- `trim_engine`: Generate 10 diverse strategies, select top 3 by quality (V6); section-aware with chorus preservation (V7)
+- `quality_scorer`: Enhanced heuristics + optional MERT embeddings (V5)
+- `crossfade`: Constant-power crossfades (500ms in V7)
+- `output_generator`: Render with crossfades, save files
 
-**audio_loader.py**
-- `load_audio(file_path, target_sr=22050) -> (audio_data, sr)`
-- `check_normalized_size(audio_data, sr, max_mb=15.0) -> (is_valid, size_mb)`
+## Key Features (V7)
 
-**spectral_analyzer.py**
-- `extract_chroma_features(audio_data, sr, hop_length=2048) -> chroma`
-- `build_self_similarity_matrix(chroma) -> ssm`
-- `detect_repeated_segments(ssm, sr, hop_length, min_duration=4.0, threshold=0.8) -> List[Dict]`
-- `analyze_audio_structure(audio_data, sr) -> Dict[chroma, ssm, repeated_segments]`
+- **Intelligent chorus preservation** (V7) - keeps at least 1 chorus, prioritizes cutting verses > bridges > extra choruses
+- **Enhanced crossfades** (V7) - 500ms constant-power crossfades for smoother melodic transitions
+- **Section-aware priority system** (V7) - cuts extra verses first, protects first chorus occurrence
+- **10 strategies generated, top 3 shown** (V6) - ensures variety, excludes previously shown options on regeneration
+- **Strict ±15s length enforcement** (V5) - iterative refinement ensures compliance
+- **Enhanced quality scoring** (V5) - spectral flux, loudness consistency, tempo stability
+- **Optional MERT embeddings** (V5) - AI-powered transition quality assessment (`--use-mert`)
+- **Normalized star ratings** (V5) - Full 0.0-5.0 scale with 0.1 increments (linear mapping: 100pts = 5.0★)
+- **Section-aware cutting** (V4) - aligns cuts to section boundaries
+- **Radio edit strategy** (V4) - back-to-back cuts forming continuous removal
+- Auto intro/outro protection (first/last 10% or 15s)
+- Beat-aligned cutting at bar boundaries
 
-**segment_matcher.py**
-- `parse_protected_regions(regions_str) -> List[Tuple[float, float]]`
-- `is_segment_protected(start, end, protected) -> bool`
-- `cluster_similar_segments(segments, threshold=0.8) -> List[Dict]`
-- `match_segments(repeated_segments, protected_str) -> Dict[clusters, protected_regions, filtered_segments]`
+## Parameters
 
-**trim_engine.py**
-- `TrimStrategy` dataclass: name, cut_points, loop_points, fade_regions, target_length
-- `generate_trim_strategies(clusters, original_length, target_length, protected) -> List[TrimStrategy]`
+**Segment Detection:**
+- Min: 15.0s, Max: 60.0s, Threshold: 0.75
 
-**quality_scorer.py**
-- `points_to_stars(points) -> float` (≥90→5.0, ≥85→4.5, ≥80→4.0, etc.)
-- `score_strategy(strategy, audio_data, sr, chroma, original_length) -> Dict[total_points, star_rating, breakdown]`
+**Quality Scoring (V5):**
+- Musical coherence: 50 points (includes 10pt pattern bonus + optional 5pt MERT)
+- Transition smoothness: 30 points (20pt base + 5pt spectral flux + 5pt loudness)
+- Length accuracy: 20 points (strict: 0 points if >30s error)
+- **Star conversion:** Linear 0-100pts → 0.0-5.0★ (100pts=5.0★, 80pts=4.0★, 60pts=3.0★)
 
-**output_generator.py**
-- `render_strategy(audio_data, sr, strategy) -> np.ndarray`
-- `generate_outputs(audio_data, sr, strategies, scores, output_dir, ...) -> Dict[audio_files, summary_json, summary_txt]`
+**Cut Strategy Generation (V6/V7):**
+- Generate 10 diverse strategies with different aggressiveness levels
+- Score all 10 strategies using quality scorer
+- Select top 3 by quality for output generation
+- Exclude previously shown strategies on regeneration
+- Each strategy: section-aware with chorus preservation (V7)
+- Iterative refinement to ±15s (max 3 iterations per strategy)
 
-**cli.py**
-- `run_pipeline(input_file, target_length, protected_regions, output_dir) -> Dict[strategies, scores, output_files, processing_time]`
+**MERT Embeddings (V5 - Optional):**
+- Model: MERT-95M (360MB, first-time download)
+- Processing: ~20s per 3-min song on CPU
+- Quality boost: +0.2-0.4★ typical
+- Enable with: `--use-mert` flag
 
-## Key Constraints
+## Common Tasks
 
-- All outputs within ±15 seconds of target length
-- At least one option ≥4.5★ (85+ points)
-- Processing time: ~60 seconds for 3-minute song
-- File size limit: 15MB after normalization (warning if exceeded)
-- Protected regions never modified
+### Adjust Min Segment Duration
+`spectral_analyzer.py:64` - `min_segment_duration` parameter (default: 15.0s)
 
-## Key Design Principles
+### Change Similarity Threshold
+`spectral_analyzer.py:66` - `similarity_threshold` parameter (default: 0.75)
 
-- **DRY**: Single responsibility per module, no code duplication
-- **YAGNI**: Only features from spec, no premature optimization
-- **TDD**: All modules have comprehensive tests (63 tests total)
-- **Web-Ready**: Core modules accept standard Python types, no CLI dependencies
+### Modify Quality Weights
+`quality_scorer.py:531-624` - `score_strategy()` function weights
 
-## Common Development Tasks
+### Change Star Rating Conversion
+`quality_scorer.py:685-710` - `points_to_stars()` function (currently linear 0-100 → 0.0-5.0)
 
-### Add New Strategy Type
-1. Add function to `src/trim_engine.py`: `generate_experimental_strategy()`
-2. Update `generate_trim_strategies()` to include new strategy
-3. Add tests in `tests/test_trim_engine.py`
+### Tune Length Tolerance
+`trim_engine.py:540-641` - `refine_strategy_for_length()` tolerance parameter (default: 15.0s)
 
-### Modify Quality Scoring
-1. Change component max points in `src/quality_scorer.py` (must sum to 100)
-2. Adjust star thresholds in `points_to_stars()`
-3. Update tests to match new thresholds
+### Adjust Initial Buffers
+`trim_engine.py:274,343,432` - Buffer zones for conservative/balanced/aggressive
 
-### Support New Audio Format
-1. Check librosa supports the format
-2. Add to `SUPPORTED_FORMATS` in `src/audio_loader.py`
-3. Add test fixture and test
+### Change Quality Threshold
+`cli.py:142` - Quality threshold check (default: 3.5★)
 
-### Adjust Constraint Thresholds
-- **Length tolerance (±15s)**: Edit `generate_trim_strategies()` in `trim_engine.py`
-- **Quality guarantee (≥4.5★)**: Edit `run_pipeline()` in `cli.py`
-- **Processing time**: Increase `hop_length` in `spectral_analyzer.py` (2048 → 4096)
-- **File size limit (15MB)**: Edit `check_normalized_size()` in `audio_loader.py`
+## Constraints (V7)
 
-## Testing Strategy
+- **Length tolerance: ±15s (STRICT)** - enforced via iterative refinement
+- **Min quality: ≥3.5★** (retries up to 5 times with different seeds)
+- **Chorus preservation: ≥1 chorus** (V7) - first chorus always protected (when detected)
+- **Crossfade duration: 500ms** (V7) - longer crossfades for smoother transitions
+- Processing: ~60s for 3-min song (without MERT), ~70s (with MERT)
+- File size limit: 15MB after normalization
+- Star ratings: 0.0-5.0 scale, 0.1 increments, rounded
 
-- **Unit tests**: Each module has dedicated test file (7 test files)
-- **Integration tests**: End-to-end pipeline in `test_integration.py`
-- **Test fixtures**: `sample_30s.wav` (unit), `sample_3min.wav` (integration)
-- **Coverage goal**: >80% for core modules (currently 86%)
+## Documentation
 
-## Future Web Deployment
+- `README.md`: User documentation
+- `CLAUDE.md`: This file - development guide
+- `V7_COMPLETE_REPORT.md`: V7 chorus preservation & smooth transitions implementation
+- `V7_IMPLEMENTATION_PROGRESS.md`: V7 progress tracking and test results
+- `RESEARCH_FINDINGS.md`: Research on advanced music editing & quality assessment
+- `TESTING_GUIDE.md`: Test scenarios
 
-Core modules are web-ready. Example FastAPI endpoint:
+## Performance (V7)
 
-```python
-from fastapi import FastAPI, UploadFile
-from src.audio_loader import load_audio
-from src.spectral_analyzer import analyze_audio_structure
-from src.segment_matcher import match_segments
-from src.trim_engine import generate_trim_strategies
-from src.quality_scorer import score_strategy
-from src.output_generator import render_strategy
+- Processing: ~60-70s for 3-min song (60s without MERT, 70s with MERT)
+- Memory: ~200MB peak (without MERT), ~400MB (with MERT)
+- Quality: 3.0-3.8★ typical (3.5★ without MERT, 3.8★ with MERT)
+- Length: ±5-12s typical (100% within ±15s)
+- Cut pattern: 1-2 continuous blocks (radio edit style)
+- Chorus detection: Identifies repeated, high-energy, 12-30s sections (≥3 repetitions)
 
-app = FastAPI()
+## Version History
 
-@app.post("/api/trim")
-async def trim_audio(file: UploadFile, target_length: float = 120):
-    # Save uploaded file temporarily
-    audio_data, sr = load_audio(file.file)
-    
-    # Run pipeline
-    analysis = analyze_audio_structure(audio_data, sr)
-    match_result = match_segments(analysis['repeated_segments'], "")
-    strategies = generate_trim_strategies(match_result['clusters'], len(audio_data)/sr, target_length, [])
-    scores = [score_strategy(s, audio_data, sr, analysis['chroma'], len(audio_data)/sr) for s in strategies]
-    
-    # Render best strategy
-    best_idx = max(range(len(scores)), key=lambda i: scores[i]['star_rating'])
-    rendered = render_strategy(audio_data, sr, strategies[best_idx])
-    
-    return {
-        'audio': rendered.tobytes(),
-        'rating': scores[best_idx]['star_rating'],
-        'length': strategies[best_idx].calculate_resulting_length(len(audio_data)/sr)
-    }
-```
+- **V7** (Current): Intelligent chorus preservation + 500ms crossfades + section-aware priority system
+- **V6**: Generate 10 strategies, show top 3 by quality + regeneration with exclusion
+- **V5**: Enhanced quality scoring + strict ±15s + MERT embeddings + normalized 0.0-5.0★ scale + 3.5★ threshold
+- **V4**: Section-aware cutting + back-to-back cuts + radio edit strategy
+- **V3**: Beat-aligned cutting + constant-power crossfades
+- **V2**: Quality scoring improvements
+- **V1**: Initial release
 
-No refactoring required - modules already accept standard Python types and return structured data.
+## Recent Changes (V7)
 
-## Troubleshooting
+**V7 Features:**
+- ✅ Chorus detection with repetition counting (integrated with spectral analyzer)
+- ✅ Chorus preservation logic (first chorus protected, verses cut first)
+- ✅ Section-aware priority system (verses=1, bridges=2, choruses=3)
+- ✅ Enhanced crossfades (300ms → 500ms) for smoother melodic transitions
+- ✅ Triple-layer smoothing: section-aligned + beat-aligned + 500ms crossfades
 
-**ImportError when running CLI**: Use `PYTHONPATH=. python src/cli.py ...`
+**V6 Features:**
+- ✅ Generate 10 diverse strategies, select top 3 by quality
+- ✅ Regeneration excludes previously shown strategies
+- ✅ Improved output variety
 
-**Tests fail on fresh clone**: Generate test fixtures first (see commands above)
+**Known Limitations:**
+- Chorus detection requires: 12-30s duration, high energy (top 40%), ≥3 repetitions
+- Some songs may not have detectable choruses (correctly identified as no-chorus structure)
 
-**Low quality scores (<4.5★)**: Check if audio has sufficient repeated segments. Short or highly varied audio may not have detectable repetitions.
-
-**Processing too slow**: Increase `hop_length` in spectral analyzer (trades accuracy for speed)
-
-**Memory issues with large files**: Check file size after normalization with `check_normalized_size()`. Consider downsampling or compression for files >15MB.
+**Pending Cleanup:**
+- Remove backup files: `src/*.backup`, `src/*.v4_backup`
+- Clean test output directories: `output_test/`, `output_v5_*/`, `output_final_single/`

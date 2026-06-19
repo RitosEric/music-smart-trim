@@ -19,20 +19,26 @@ def run_pipeline(
     target_length: float,
     protected_regions: List[str],
     output_dir: Path,
-    regenerate_seed: Optional[int] = None
+    regenerate_seed: Optional[int] = None,
+    use_mert: bool = False,
+    excluded_strategies: Optional[List[str]] = None,
+    auto_protect: bool = True
 ) -> Dict:
     """
     Run complete pipeline from audio loading to output generation.
 
     Orchestrates the entire workflow:
     1. Load audio
-    2. Analyze audio structure (spectral analysis)
+    2. Analyze audio structure (spectral analysis + beat detection)
     3. Match segments and handle protected regions
-    4. Generate trim strategies (conservative, balanced, aggressive)
-    5. Score each strategy
-    6. Generate outputs
+    4. Generate 10 diverse trim strategies (section-aware, back-to-back cuts)
+    5. Score all strategies and select top 3 by quality
+    6. Generate outputs for top 3 only
 
-    Ensures at least one option scores ≥4.5★ by retrying up to 5 times with different seeds.
+    NEW IN V6:
+    - Generates 10 diverse strategies, shows only top 3 by quality
+    - Excludes previously shown strategies on regeneration
+    - Ensures variety in output options
 
     Args:
         audio_path: Path to input audio file
@@ -40,13 +46,17 @@ def run_pipeline(
         protected_regions: List of protected region strings in "MM:SS-MM:SS" format
         output_dir: Directory to save output files
         regenerate_seed: Optional seed for regeneration (None for first run)
+        use_mert: Whether to use MERT embeddings for quality scoring (slower but better)
+        excluded_strategies: List of strategy names to exclude (for regeneration)
+        auto_protect: Whether to automatically protect intro/outro (default: True)
 
     Returns:
         Dict with keys:
-            - strategies: List of TrimStrategy objects
-            - scores: List of score dicts
+            - strategies: List of top 3 TrimStrategy objects
+            - scores: List of top 3 score dicts
             - output_files: List of output file paths
             - processing_time: Processing time in seconds
+            - all_strategies: List of all 10 strategy names (for exclusion tracking)
 
     Raises:
         AudioLoadError: If audio file cannot be loaded
@@ -59,63 +69,154 @@ def run_pipeline(
     original_length = len(audio_data) / sample_rate
     print(f"Audio loaded: {original_length:.2f}s @ {sample_rate}Hz")
 
-    # Stage 2: Analyze audio structure
+    # Stage 2: Analyze audio structure (including beats and sections)
     print("Analyzing audio structure...")
+    from src.structure_analyzer import analyze_structure, get_protected_intro_outro
+
     analysis_result = analyze_audio_structure(audio_data, sample_rate)
     repeated_segments = analysis_result['repeated_segments']
+    chroma = analysis_result['chroma']
+
+    # Detect music structure (intro, verse, chorus, outro) and beats
+    # V2: Pass repeated_segments for better chorus detection
+    structure = analyze_structure(audio_data, sample_rate, chroma, repeated_segments)
+
     print(f"Found {len(repeated_segments)} repeated segments")
+    print(f"Detected tempo: {structure['beat_info']['tempo']:.1f} BPM")
+    print(f"Detected {len(structure['sections'])} sections:")
+    for section in structure['sections']:
+        print(f"  {section['start']:.1f}s - {section['end']:.1f}s: {section['label']}")
+
+    # Conditionally protect intro and outro based on auto_protect flag
+    all_protected_regions = protected_regions
+    if auto_protect:
+        # Automatically protect intro and outro (10s, section-aligned)
+        auto_protected = get_protected_intro_outro(audio_data, sample_rate, structure['sections'])
+        intro_end = int(auto_protected[0][1])
+        outro_start = int(auto_protected[1][0])
+        print(f"\nAuto-protecting intro (0-{intro_end}s) and outro ({outro_start}s-{int(original_length)}s)")
+
+        # Format as time strings and add to protected regions
+        intro_minutes = int(intro_end // 60)
+        intro_seconds = int(intro_end % 60)
+        outro_minutes = int(outro_start // 60)
+        outro_seconds = int(outro_start % 60)
+        end_minutes = int(original_length // 60)
+        end_seconds = int(original_length % 60)
+
+        all_protected_regions = protected_regions + [
+            f"0:00-{intro_minutes}:{intro_seconds:02d}",
+            f"{outro_minutes}:{outro_seconds:02d}-{end_minutes}:{end_seconds:02d}"
+        ]
+    else:
+        print("\nAuto-protection disabled - intro/outro may be cut")
 
     # Stage 3: Match segments
     print("Matching segments and filtering protected regions...")
-    match_result = match_segments(repeated_segments, protected_regions)
+    match_result = match_segments(repeated_segments, all_protected_regions)
     clusters = match_result['clusters']
     protected_regions_parsed = match_result['protected_regions']
     print(f"Identified {len(clusters)} segment clusters")
+    print(f"Protected regions: {len(protected_regions_parsed)}")
 
-    # Stage 4: Generate trim strategies
-    print("Generating trim strategies...")
-    strategies = generate_trim_strategies(
+    # Stage 4: Generate 10 diverse trim strategies (with section awareness)
+    print("Generating 10 diverse trim strategies...")
+    all_strategies = generate_trim_strategies(
         clusters,
         original_length,
         target_length,
-        regenerate_seed=regenerate_seed
+        sections=structure['sections'],
+        downbeats=structure['beat_info']['downbeats'],
+        regenerate_seed=regenerate_seed,
+        num_strategies=10
     )
-    print(f"Generated {len(strategies)} strategies: {[s.name for s in strategies]}")
+    print(f"Generated {len(all_strategies)} strategies")
 
-    # Stage 5: Score each strategy
-    print("Scoring strategies...")
-    scores = []
-    for strategy in strategies:
-        score = score_strategy(strategy, audio_data, sample_rate, original_length)
-        scores.append(score)
-        print(f"  {strategy.name}: {score['star_rating']}★ ({score['total_points']:.1f} points)")
+    # DEBUG: Show cut point differences
+    print("\nStrategy cut details:")
+    for strategy in all_strategies:
+        if strategy.cut_points:
+            cut_summary = ", ".join([f"{start:.1f}-{end:.1f}s" for start, end in strategy.cut_points])
+            total_cut = sum(end - start for start, end in strategy.cut_points)
+            print(f"  {strategy.name}: {len(strategy.cut_points)} cuts ({total_cut:.1f}s removed): [{cut_summary}]")
+        else:
+            print(f"  {strategy.name}: No cuts")
 
-    # Check if at least one option scores ≥4.5★
-    max_rating = max(score['star_rating'] for score in scores)
-    if max_rating < 4.5 and regenerate_seed is None:
+    # Stage 5: Render and score ALL strategies
+    print("Scoring all strategies...")
+    if use_mert:
+        print("  Using MERT embeddings for enhanced quality scoring...")
+    from src.output_generator import render_strategy
+
+    scored_strategies = []
+    for strategy in all_strategies:
+        # Render the strategy to get actual output
+        rendered_audio = render_strategy(strategy, audio_data, sample_rate)
+        # Score based on rendered output (with optional MERT)
+        score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
+        scored_strategies.append({
+            'strategy': strategy,
+            'score': score,
+            'rendered_audio': rendered_audio
+        })
+        print(f"  {strategy.name}: {score['star_rating']:.1f}★ ({score['total_points']:.1f} points, {score['resulting_length']:.1f}s)")
+
+    # Filter out excluded strategies if this is a regeneration
+    if excluded_strategies:
+        print(f"\nFiltering out {len(excluded_strategies)} previously shown strategies...")
+        scored_strategies = [s for s in scored_strategies if s['strategy'].name not in excluded_strategies]
+        print(f"Remaining candidates: {len(scored_strategies)}")
+
+    # Select BEST strategy (highest quality rating)
+    scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
+    best = scored_strategies[0]
+
+    print(f"\n✨ Best strategy selected:")
+    print(f"  {best['strategy'].name} - {best['score']['star_rating']:.1f}★")
+
+    # Extract strategy and score for output (single best)
+    strategies = [best['strategy']]
+    scores = [best['score']]
+
+    # Check if best strategy scores ≥3.5★ (realistic threshold)
+    max_rating = scores[0]['star_rating']  # We only have 1 score now
+    if max_rating < 3.5 and regenerate_seed is None:
         # Retry up to 5 times with different seeds
-        print(f"Max rating {max_rating}★ < 4.5★, retrying with different seeds...")
+        print(f"Max rating {max_rating:.1f}★ < 3.5★, retrying with different seeds...")
         for retry_seed in range(1, 6):
             print(f"\nRetry {retry_seed}/5 with seed {retry_seed}...")
-            strategies = generate_trim_strategies(
+            all_strategies = generate_trim_strategies(
                 clusters,
                 original_length,
                 target_length,
-                regenerate_seed=retry_seed
+                sections=structure['sections'],
+                downbeats=structure['beat_info']['downbeats'],
+                regenerate_seed=retry_seed,
+                num_strategies=10
             )
-            scores = []
-            for strategy in strategies:
-                score = score_strategy(strategy, audio_data, sample_rate, original_length)
-                scores.append(score)
-                print(f"  {strategy.name}: {score['star_rating']}★ ({score['total_points']:.1f} points)")
 
-            max_rating = max(score['star_rating'] for score in scores)
-            if max_rating >= 4.5:
-                print(f"Found acceptable rating: {max_rating}★ ≥ 4.5★")
+            scored_strategies = []
+            for strategy in all_strategies:
+                rendered_audio = render_strategy(strategy, audio_data, sample_rate)
+                score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
+                scored_strategies.append({
+                    'strategy': strategy,
+                    'score': score,
+                    'rendered_audio': rendered_audio
+                })
+
+            scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
+            best = scored_strategies[0]
+            strategies = [best['strategy']]
+            scores = [best['score']]
+
+            max_rating = scores[0]['star_rating']
+            if max_rating >= 3.5:
+                print(f"Found acceptable rating: {max_rating:.1f}★ ≥ 3.5★")
                 break
 
-    # Stage 6: Generate outputs
-    print(f"\nGenerating output files to {output_dir}...")
+    # Stage 6: Generate output for BEST strategy only
+    print(f"\nGenerating output file to {output_dir}...")
     processing_time = time.time() - start_time
 
     generate_outputs(
@@ -134,7 +235,7 @@ def run_pipeline(
     output_files = []
     for i, score in enumerate(scores):
         stars = score['star_rating']
-        output_filename = f"option_{i}_{stars}stars.wav"
+        output_filename = f"option_{i}_{stars:.1f}stars.wav"
         output_files.append(str(output_dir / output_filename))
 
     print("Pipeline complete!")
@@ -144,7 +245,8 @@ def run_pipeline(
         'scores': scores,
         'output_files': output_files,
         'processing_time': processing_time,
-        'original_length': original_length
+        'original_length': original_length,
+        'all_strategy_names': [s['strategy'].name for s in scored_strategies[:10]]  # Track all 10 for exclusion
     }
 
 
@@ -185,6 +287,18 @@ def parse_arguments() -> argparse.Namespace:
         type=Path,
         default=Path('output'),
         help='Output directory (default: ./output)'
+    )
+
+    parser.add_argument(
+        '--use-mert',
+        action='store_true',
+        help='Use MERT embeddings for enhanced quality scoring (slower but better quality assessment)'
+    )
+
+    parser.add_argument(
+        '--no-auto-protect',
+        action='store_true',
+        help='Disable automatic intro/outro protection (allows cutting from start/end)'
     )
 
     return parser.parse_args()
@@ -241,26 +355,43 @@ def main():
     print(f"Input: {args.input}")
     print(f"Target length: {args.target}s")
     print(f"Protected regions: {args.protect if args.protect else 'None'}")
+    print(f"Auto-protect intro/outro: {'No' if args.no_auto_protect else 'Yes'}")
     print(f"Output directory: {args.output_dir}")
+    print(f"MERT embeddings: {'Enabled' if args.use_mert else 'Disabled'}")
+    print("=" * 60)
     print("=" * 60 + "\n")
 
     try:
+        # Track excluded strategies across regenerations
+        excluded_strategies = []
+
         # Run initial pipeline
         result = run_pipeline(
             audio_path=args.input,
             target_length=args.target,
             protected_regions=args.protect,
             output_dir=args.output_dir,
-            regenerate_seed=None
+            regenerate_seed=None,
+            use_mert=args.use_mert,
+            excluded_strategies=None,
+            auto_protect=not args.no_auto_protect
         )
 
         # Display results
         display_results(result)
 
+        # Track shown strategies
+        excluded_strategies.extend([s.name for s in result['strategies']])
+
         # Regeneration loop
         regenerate_count = 0
         while True:
-            response = input("\nGenerate alternative options? (y/n): ").strip().lower()
+            try:
+                response = input("\nGenerate alternative options? (y/n): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                # Non-interactive mode or user interrupt
+                print("\nExiting.")
+                break
 
             if response == 'y':
                 regenerate_count += 1
@@ -271,10 +402,16 @@ def main():
                     target_length=args.target,
                     protected_regions=args.protect,
                     output_dir=args.output_dir,
-                    regenerate_seed=regenerate_count
+                    regenerate_seed=regenerate_count,
+                    use_mert=args.use_mert,
+                    excluded_strategies=excluded_strategies,
+                    auto_protect=not args.no_auto_protect
                 )
 
                 display_results(result)
+
+                # Track newly shown strategies
+                excluded_strategies.extend([s.name for s in result['strategies']])
 
             elif response == 'n':
                 print("\nThank you for using Music Smart Trim!")
