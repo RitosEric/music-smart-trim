@@ -4,7 +4,7 @@ import time
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 from src.audio_loader import load_audio, AudioLoadError
 from src.spectral_analyzer import analyze_audio_structure
@@ -12,6 +12,143 @@ from src.segment_matcher import match_segments
 from src.trim_engine import generate_trim_strategies
 from src.quality_scorer import score_strategy
 from src.output_generator import generate_outputs
+
+
+# Constants
+MIN_ACCEPTABLE_QUALITY = 3.5
+MAX_QUALITY_RETRIES = 5
+
+
+def format_time_string(seconds: float) -> str:
+    """
+    Format seconds as MM:SS string.
+
+    Args:
+        seconds: Time in seconds
+
+    Returns:
+        Time string in "MM:SS" format
+    """
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}:{secs:02d}"
+
+
+def get_all_protected_regions(
+    user_protected: List[str],
+    auto_protect: bool,
+    structure: Dict,
+    audio_data,
+    sample_rate: int,
+    original_length: float
+) -> List[str]:
+    """
+    Get all protected regions (user-specified + auto intro/outro).
+
+    Args:
+        user_protected: User-specified protected regions
+        auto_protect: Whether to auto-protect intro/outro
+        structure: Music structure with sections
+        audio_data: Audio data array
+        sample_rate: Sample rate
+        original_length: Original audio length in seconds
+
+    Returns:
+        List of all protected region strings in "MM:SS-MM:SS" format
+    """
+    if not auto_protect:
+        print("\nAuto-protection disabled - intro/outro may be cut")
+        return user_protected
+
+    # Automatically protect intro and outro (section-aligned)
+    from src.structure_analyzer import get_protected_intro_outro
+    auto_protected = get_protected_intro_outro(audio_data, sample_rate, structure['sections'])
+    intro_end = int(auto_protected[0][1])
+    outro_start = int(auto_protected[1][0])
+    print(f"\nAuto-protecting intro (0-{intro_end}s) and outro ({outro_start}s-{int(original_length)}s)")
+
+    # Format as time strings and add to protected regions
+    intro_str = f"0:00-{format_time_string(intro_end)}"
+    outro_str = f"{format_time_string(outro_start)}-{format_time_string(original_length)}"
+
+    return user_protected + [intro_str, outro_str]
+
+
+def retry_for_quality(
+    scored_strategies: List[Dict],
+    clusters: List[Dict],
+    original_length: float,
+    target_length: float,
+    structure: Dict,
+    audio_data,
+    sample_rate: int,
+    use_mert: bool,
+    regenerate_seed: Optional[int]
+) -> Tuple[List, List]:
+    """
+    Retry strategy generation if quality is below threshold.
+
+    Args:
+        scored_strategies: Initial scored strategies
+        clusters: Segment clusters
+        original_length: Original audio length
+        target_length: Target length
+        structure: Music structure
+        audio_data: Audio data array
+        sample_rate: Sample rate
+        use_mert: Whether to use MERT embeddings
+        regenerate_seed: Current regeneration seed (None for first run)
+
+    Returns:
+        Tuple of (strategies, scores) - best strategy and its score
+    """
+    from src.output_generator import render_strategy
+
+    scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
+    best = scored_strategies[0]
+    strategies = [best['strategy']]
+    scores = [best['score']]
+
+    max_rating = scores[0]['star_rating']
+
+    # Only retry on first run (not during manual regeneration)
+    if max_rating < MIN_ACCEPTABLE_QUALITY and regenerate_seed is None:
+        print(f"Max rating {max_rating:.1f}★ < {MIN_ACCEPTABLE_QUALITY}★, retrying with different seeds...")
+
+        for retry_seed in range(1, MAX_QUALITY_RETRIES + 1):
+            print(f"\nRetry {retry_seed}/{MAX_QUALITY_RETRIES} with seed {retry_seed}...")
+
+            all_strategies = generate_trim_strategies(
+                clusters,
+                original_length,
+                target_length,
+                sections=structure['sections'],
+                downbeats=structure['beat_info']['downbeats'],
+                regenerate_seed=retry_seed,
+                num_strategies=10
+            )
+
+            scored_strategies = []
+            for strategy in all_strategies:
+                rendered_audio = render_strategy(strategy, audio_data, sample_rate)
+                score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
+                scored_strategies.append({
+                    'strategy': strategy,
+                    'score': score,
+                    'rendered_audio': rendered_audio
+                })
+
+            scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
+            best = scored_strategies[0]
+            strategies = [best['strategy']]
+            scores = [best['score']]
+
+            max_rating = scores[0]['star_rating']
+            if max_rating >= MIN_ACCEPTABLE_QUALITY:
+                print(f"Found acceptable rating: {max_rating:.1f}★ ≥ {MIN_ACCEPTABLE_QUALITY}★")
+                break
+
+    return strategies, scores
 
 
 def run_pipeline(
@@ -87,29 +224,10 @@ def run_pipeline(
     for section in structure['sections']:
         print(f"  {section['start']:.1f}s - {section['end']:.1f}s: {section['label']}")
 
-    # Conditionally protect intro and outro based on auto_protect flag
-    all_protected_regions = protected_regions
-    if auto_protect:
-        # Automatically protect intro and outro (10s, section-aligned)
-        auto_protected = get_protected_intro_outro(audio_data, sample_rate, structure['sections'])
-        intro_end = int(auto_protected[0][1])
-        outro_start = int(auto_protected[1][0])
-        print(f"\nAuto-protecting intro (0-{intro_end}s) and outro ({outro_start}s-{int(original_length)}s)")
-
-        # Format as time strings and add to protected regions
-        intro_minutes = int(intro_end // 60)
-        intro_seconds = int(intro_end % 60)
-        outro_minutes = int(outro_start // 60)
-        outro_seconds = int(outro_start % 60)
-        end_minutes = int(original_length // 60)
-        end_seconds = int(original_length % 60)
-
-        all_protected_regions = protected_regions + [
-            f"0:00-{intro_minutes}:{intro_seconds:02d}",
-            f"{outro_minutes}:{outro_seconds:02d}-{end_minutes}:{end_seconds:02d}"
-        ]
-    else:
-        print("\nAuto-protection disabled - intro/outro may be cut")
+    # Get all protected regions (user-specified + optional auto intro/outro)
+    all_protected_regions = get_all_protected_regions(
+        protected_regions, auto_protect, structure, audio_data, sample_rate, original_length
+    )
 
     # Stage 3: Match segments
     print("Matching segments and filtering protected regions...")
@@ -167,53 +285,14 @@ def run_pipeline(
         scored_strategies = [s for s in scored_strategies if s['strategy'].name not in excluded_strategies]
         print(f"Remaining candidates: {len(scored_strategies)}")
 
-    # Select BEST strategy (highest quality rating)
-    scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
-    best = scored_strategies[0]
+    # Select BEST strategy (with quality retry if needed)
+    strategies, scores = retry_for_quality(
+        scored_strategies, clusters, original_length, target_length,
+        structure, audio_data, sample_rate, use_mert, regenerate_seed
+    )
 
     print(f"\n✨ Best strategy selected:")
-    print(f"  {best['strategy'].name} - {best['score']['star_rating']:.1f}★")
-
-    # Extract strategy and score for output (single best)
-    strategies = [best['strategy']]
-    scores = [best['score']]
-
-    # Check if best strategy scores ≥3.5★ (realistic threshold)
-    max_rating = scores[0]['star_rating']  # We only have 1 score now
-    if max_rating < 3.5 and regenerate_seed is None:
-        # Retry up to 5 times with different seeds
-        print(f"Max rating {max_rating:.1f}★ < 3.5★, retrying with different seeds...")
-        for retry_seed in range(1, 6):
-            print(f"\nRetry {retry_seed}/5 with seed {retry_seed}...")
-            all_strategies = generate_trim_strategies(
-                clusters,
-                original_length,
-                target_length,
-                sections=structure['sections'],
-                downbeats=structure['beat_info']['downbeats'],
-                regenerate_seed=retry_seed,
-                num_strategies=10
-            )
-
-            scored_strategies = []
-            for strategy in all_strategies:
-                rendered_audio = render_strategy(strategy, audio_data, sample_rate)
-                score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
-                scored_strategies.append({
-                    'strategy': strategy,
-                    'score': score,
-                    'rendered_audio': rendered_audio
-                })
-
-            scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
-            best = scored_strategies[0]
-            strategies = [best['strategy']]
-            scores = [best['score']]
-
-            max_rating = scores[0]['star_rating']
-            if max_rating >= 3.5:
-                print(f"Found acceptable rating: {max_rating:.1f}★ ≥ 3.5★")
-                break
+    print(f"  {strategies[0].name} - {scores[0]['star_rating']:.1f}★")
 
     # Stage 6: Generate output for BEST strategy only
     print(f"\nGenerating output file to {output_dir}...")

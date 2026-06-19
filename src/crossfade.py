@@ -4,6 +4,47 @@ import numpy as np
 import librosa
 
 
+# Crossfade duration constants (in milliseconds)
+# These define the fade duration for different strategy types
+CROSSFADE_CONSERVATIVE_MS = 500  # Conservative: longer, smoother transitions
+CROSSFADE_BALANCED_MS = 500      # Balanced: standard smooth transitions
+CROSSFADE_AGGRESSIVE_MS = 500    # Aggressive: same as others (standardized in V7)
+DEFAULT_CROSSFADE_MS = 500       # Default for output rendering
+
+
+def ms_to_fade_duration(ms: int) -> float:
+    """
+    Convert milliseconds to fade duration in seconds (half-duration for ± notation).
+
+    For crossfades, we specify ±X seconds, meaning X seconds fade-out + X seconds fade-in.
+    Total crossfade duration = 2 * X seconds.
+
+    Args:
+        ms: Total crossfade duration in milliseconds
+
+    Returns:
+        Half-duration in seconds (the ± value)
+
+    Example:
+        ms_to_fade_duration(500) -> 0.25  # ±0.25s = 500ms total crossfade
+    """
+    return (ms / 1000.0) / 2.0
+
+
+def ms_to_samples(ms: int, sample_rate: int) -> int:
+    """
+    Convert milliseconds to sample count.
+
+    Args:
+        ms: Duration in milliseconds
+        sample_rate: Audio sample rate
+
+    Returns:
+        Number of samples
+    """
+    return int((ms / 1000.0) * sample_rate)
+
+
 def constant_power_crossfade(
     audio1: np.ndarray,
     audio2: np.ndarray,

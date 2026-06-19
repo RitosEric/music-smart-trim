@@ -169,7 +169,7 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - ✅ Chorus detection with repetition counting (integrated with spectral analyzer)
 - ✅ Chorus preservation logic (first chorus protected, verses cut first)
 - ✅ Section-aware priority system (verses=1, bridges=2, choruses=3)
-- ✅ Enhanced crossfades (300ms → 500ms) for smoother melodic transitions
+- ✅ Enhanced crossfades (standardized at 500ms) for smoother melodic transitions
 - ✅ Triple-layer smoothing: section-aligned + beat-aligned + 500ms crossfades
 
 **V6 Features:**
@@ -177,10 +177,16 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - ✅ Regeneration excludes previously shown strategies
 - ✅ Improved output variety
 
+**Code Cleanup (2026-06-19):**
+- ✅ Consolidated 6 strategy functions into 1 unified `generate_strategy()` function (-227 lines)
+- ✅ Standardized crossfade durations at 500ms across all modules
+- ✅ Fixed bug: output rendering was using 1000ms instead of 500ms crossfades
+- ✅ Refactored `run_pipeline()` with helper functions for better modularity
+- ✅ Added crossfade constants module with conversion utilities
+- ✅ Implemented `--no-auto-protect` CLI flag to toggle intro/outro protection
+- ✅ Eliminated 200+ lines of duplicate code
+- ✅ See `CODE_CLEANUP_SUMMARY.md` for details
+
 **Known Limitations:**
 - Chorus detection requires: 12-30s duration, high energy (top 40%), ≥3 repetitions
 - Some songs may not have detectable choruses (correctly identified as no-chorus structure)
-
-**Pending Cleanup:**
-- Remove backup files: `src/*.backup`, `src/*.v4_backup`
-- Clean test output directories: `output_test/`, `output_v5_*/`, `output_final_single/`

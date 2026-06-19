@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 from src.trim_engine import TrimStrategy
+from src.crossfade import DEFAULT_CROSSFADE_MS, ms_to_samples
 
 
 def _convert_to_serializable(obj: Any) -> Any:
@@ -39,7 +40,7 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
     Apply cuts to audio by removing specified regions, with ENHANCED crossfades at boundaries.
 
     Merges overlapping cut regions before applying.
-    Applies longer constant-power crossfades (1000ms = 1s) for smoother, more natural transitions.
+    Applies standard constant-power crossfades (500ms) for smoother, more natural transitions.
 
     Args:
         audio: Audio signal as numpy array
@@ -76,7 +77,7 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
 
     segments = []
     last_end = 0
-    crossfade_duration = int(1.0 * sr)  # 1000ms (1 second) crossfade for smooth transitions
+    crossfade_samples = ms_to_samples(DEFAULT_CROSSFADE_MS, sr)  # 500ms crossfade for smooth transitions
 
     for i, (cut_start, cut_end) in enumerate(merged_cuts):
         cut_start_sample = int(cut_start * sr)
@@ -87,7 +88,7 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
             segment = audio[last_end:cut_start_sample]
 
             # Apply fade-out to end of segment (smooth ending before cut)
-            fade_out_duration = min(crossfade_duration, len(segment) // 2)
+            fade_out_duration = min(crossfade_samples, len(segment) // 2)
             segment = apply_smooth_fade_out(segment, fade_out_duration)
 
             segments.append(segment)
@@ -100,7 +101,7 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
         final_segment = audio[last_end:]
 
         # Apply fade-in to start of final segment (smooth entry after cut)
-        fade_in_duration = min(crossfade_duration, len(final_segment) // 2)
+        fade_in_duration = min(crossfade_samples, len(final_segment) // 2)
         final_segment = apply_smooth_fade_in(final_segment, fade_in_duration)
 
         segments.append(final_segment)
@@ -113,8 +114,8 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
     else:
         result = segments[0]
         for i in range(1, len(segments)):
-            # Apply constant-power crossfade between segments (1 second overlap)
-            result = constant_power_crossfade(result, segments[i], crossfade_duration)
+            # Apply constant-power crossfade between segments (500ms overlap)
+            result = constant_power_crossfade(result, segments[i], crossfade_samples)
         return result
 
 
@@ -237,12 +238,10 @@ def render_strategy(strategy: TrimStrategy, audio: np.ndarray, sr: int, beat_inf
     # Use beat-synced crossfading if beat info is available
     from src.crossfade import apply_smooth_fade_in, apply_smooth_fade_out
 
-    # Apply fade-in at the beginning (intro)
-    fade_duration = int(0.5 * sr)  # 500ms fade-in
-    result = apply_smooth_fade_in(result, fade_duration)
-
-    # Apply fade-out at the end (outro)
-    result = apply_smooth_fade_out(result, fade_duration)
+    # Apply fade-in at the beginning (intro) and fade-out at the end (outro)
+    fade_samples = ms_to_samples(DEFAULT_CROSSFADE_MS, sr)  # 500ms fade
+    result = apply_smooth_fade_in(result, fade_samples)
+    result = apply_smooth_fade_out(result, fade_samples)
 
     return result
 

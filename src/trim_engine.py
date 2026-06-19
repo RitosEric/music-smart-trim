@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import numpy as np
 from src.structure_analyzer import find_nearest_downbeat
+from src.crossfade import (
+    CROSSFADE_CONSERVATIVE_MS,
+    CROSSFADE_BALANCED_MS,
+    CROSSFADE_AGGRESSIVE_MS,
+    ms_to_fade_duration
+)
 
 
 @dataclass
@@ -281,35 +287,63 @@ def select_middle_region_cuts(
     return selected_cuts
 
 
-def generate_conservative_strategy(
+def generate_strategy(
+    strategy_type: str,
     clusters: List[Dict],
     original_length: float,
     target_length: float,
+    buffer: float = 0.0,
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: int = None
+    regenerate_seed: Optional[int] = None
 ) -> TrimStrategy:
     """
-    Generate conservative strategy: minimal cuts, whole sections, middle-focused.
+    Unified strategy generation with configurable parameters.
 
-    Strategy:
-    - Remove 2nd occurrence of repeated sections
-    - Align to section boundaries (cut whole verses/choruses)
-    - Prioritize middle region (20%-80%)
-    - Merge adjacent cuts for continuous removal
-    - Use 5s buffer to stay conservative
+    Consolidates conservative/balanced/aggressive strategy generation into a single
+    parameterized function to eliminate code duplication.
 
     Args:
+        strategy_type: Type of strategy - "conservative", "balanced", or "aggressive"
         clusters: List of cluster dicts with segment_times, avg_similarity, duration
         original_length: Original audio length in seconds
         target_length: Target length in seconds
+        buffer: Buffer in seconds to stay away from target (default: 0.0)
         sections: List of section dicts (for boundary alignment)
         downbeats: Array of downbeat times (for beat alignment)
         regenerate_seed: Optional seed for randomization
 
     Returns:
-        TrimStrategy with conservative approach
+        TrimStrategy with specified approach
+
+    Raises:
+        ValueError: If strategy_type is not recognized
     """
+    # Strategy-specific parameters: (max_gap, fade_duration, alignment_mode)
+    STRATEGY_PARAMS = {
+        "conservative": {
+            "max_gap": 3.0,
+            "fade_duration": ms_to_fade_duration(CROSSFADE_CONSERVATIVE_MS),
+            "alignment": "section",  # Align to section boundaries
+        },
+        "balanced": {
+            "max_gap": 2.0,
+            "fade_duration": ms_to_fade_duration(CROSSFADE_BALANCED_MS),
+            "alignment": "section",  # Align to section boundaries
+        },
+        "aggressive": {
+            "max_gap": 1.0,
+            "fade_duration": ms_to_fade_duration(CROSSFADE_AGGRESSIVE_MS),
+            "alignment": "downbeat",  # Align to downbeats only (less conservative)
+        },
+    }
+
+    if strategy_type not in STRATEGY_PARAMS:
+        raise ValueError(f"Unknown strategy_type: {strategy_type}. Must be one of {list(STRATEGY_PARAMS.keys())}")
+
+    params = STRATEGY_PARAMS[strategy_type]
+
+    # Common initialization
     if regenerate_seed is not None:
         np.random.seed(regenerate_seed)
 
@@ -318,33 +352,35 @@ def generate_conservative_strategy(
     if sections is None:
         sections = []
 
-    # Calculate how much to remove (with tighter buffer for length accuracy)
-    amount_to_remove = max(0, original_length - target_length - 2.0)
+    # Calculate amount to remove with buffer
+    amount_to_remove = max(0, original_length - target_length - buffer)
 
-    # Select middle-region cuts with CHORUS PRESERVATION
+    # Select cuts from middle region with chorus preservation
     raw_cuts = select_middle_region_cuts(
         clusters, sections, original_length, amount_to_remove,
         prioritize_chorus_preservation=True
     )
 
-    # Align to section boundaries
+    # Align cuts based on strategy
     aligned_cuts = []
     for cut_start, cut_end in raw_cuts:
-        aligned = align_to_section_boundaries(cut_start, cut_end, sections, downbeats)
+        if params["alignment"] == "section":
+            aligned = align_to_section_boundaries(cut_start, cut_end, sections, downbeats)
+        else:  # downbeat
+            aligned = align_to_downbeats(cut_start, cut_end, downbeats)
         aligned_cuts.append(aligned)
 
-    # Merge adjacent cuts to create continuous removals
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=3.0)
+    # Merge adjacent cuts
+    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=params["max_gap"])
 
-    # Create fade regions with LONGER crossfades for smooth transitions (500ms)
-    # This is critical to prevent abrupt melodic changes between sections
-    fade_regions = []
-    fade_duration = 0.25  # ±0.25s = 500ms total crossfade
-    for cut_start, _ in merged_cuts:
-        fade_regions.append((cut_start - fade_duration, cut_start + fade_duration))
+    # Create fade regions
+    fade_regions = [
+        (cut_start - params["fade_duration"], cut_start + params["fade_duration"])
+        for cut_start, _ in merged_cuts
+    ]
 
     return TrimStrategy(
-        name="conservative",
+        name=strategy_type,
         cut_points=merged_cuts,
         loop_points=[],
         fade_regions=fade_regions,
@@ -352,182 +388,6 @@ def generate_conservative_strategy(
     )
 
 
-def generate_balanced_strategy(
-    clusters: List[Dict],
-    original_length: float,
-    target_length: float,
-    sections: Optional[List[Dict]] = None,
-    downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: int = None
-) -> TrimStrategy:
-    """
-    Generate balanced strategy: moderate cuts, section-aware, back-to-back.
-
-    Strategy:
-    - Remove multiple occurrences from clusters
-    - Align to section boundaries when possible
-    - Merge cuts within 2s for continuous removal
-    - Use 3s buffer for moderate approach
-
-    Args:
-        clusters: List of cluster dicts
-        original_length: Original audio length in seconds
-        target_length: Target length in seconds
-        sections: List of section dicts
-        downbeats: Array of downbeat times
-        regenerate_seed: Optional seed for randomization
-
-    Returns:
-        TrimStrategy with balanced approach
-    """
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-
-    if downbeats is None:
-        downbeats = np.array([])
-    if sections is None:
-        sections = []
-
-    # Sort clusters by similarity (highest first)
-    sorted_clusters = sorted(clusters, key=lambda c: c['avg_similarity'], reverse=True)
-
-    # Calculate how much to remove (with tighter buffer)
-    amount_to_remove = max(0, original_length - target_length - 1.0)
-
-    raw_cuts = []
-    total_removed = 0.0
-
-    for cluster in sorted_clusters:
-        if total_removed >= amount_to_remove:
-            break
-
-        segment_times = cluster['segment_times']
-        if len(segment_times) < 2:
-            continue
-
-        # Sort segment times by start time
-        sorted_segments = sorted(segment_times, key=lambda s: s[0])
-
-        # Remove multiple occurrences (all but first)
-        for i in range(1, len(sorted_segments)):
-            if total_removed >= amount_to_remove:
-                break
-
-            cut_start, cut_end = sorted_segments[i]
-            raw_cuts.append((cut_start, cut_end))
-            total_removed += (cut_end - cut_start)
-
-    # Align to section boundaries
-    aligned_cuts = []
-    for cut_start, cut_end in raw_cuts:
-        aligned = align_to_section_boundaries(cut_start, cut_end, sections, downbeats)
-        aligned_cuts.append(aligned)
-
-    # Merge adjacent cuts (back-to-back strategy)
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=2.0)
-
-    # Create fade regions (standard crossfades: 150ms)
-    fade_regions = []
-    fade_duration = 0.075  # ±0.075s = 150ms total
-    for cut_start, _ in merged_cuts:
-        fade_regions.append((cut_start - fade_duration, cut_start + fade_duration))
-
-    return TrimStrategy(
-        name="balanced",
-        cut_points=merged_cuts,
-        loop_points=[],
-        fade_regions=fade_regions,
-        target_length=target_length
-    )
-
-
-def generate_aggressive_strategy(
-    clusters: List[Dict],
-    original_length: float,
-    target_length: float,
-    sections: Optional[List[Dict]] = None,
-    downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: int = None
-) -> TrimStrategy:
-    """
-    Generate aggressive strategy: maximum cuts, section-aligned, heavily merged.
-
-    Strategy:
-    - Remove all but first occurrence from each cluster
-    - Align to downbeats (may cut partial sections for more removal)
-    - Aggressively merge cuts within 1.5s
-    - Use 1s buffer for aggressive approach
-
-    Args:
-        clusters: List of cluster dicts
-        original_length: Original audio length in seconds
-        target_length: Target length in seconds
-        sections: List of section dicts
-        downbeats: Array of downbeat times
-        regenerate_seed: Optional seed for randomization
-
-    Returns:
-        TrimStrategy with aggressive approach
-    """
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-
-    if downbeats is None:
-        downbeats = np.array([])
-    if sections is None:
-        sections = []
-
-    # Sort clusters by similarity (highest first)
-    sorted_clusters = sorted(clusters, key=lambda c: c['avg_similarity'], reverse=True)
-
-    # Calculate how much to remove (no buffer for aggressive trimming)
-    amount_to_remove = max(0, original_length - target_length)
-
-    raw_cuts = []
-    total_removed = 0.0
-
-    for cluster in sorted_clusters:
-        if total_removed >= amount_to_remove:
-            break
-
-        segment_times = cluster['segment_times']
-        if len(segment_times) < 2:
-            continue
-
-        # Sort segment times by start time
-        sorted_segments = sorted(segment_times, key=lambda s: s[0])
-
-        # Remove all but first occurrence (aggressive)
-        for i in range(1, len(sorted_segments)):
-            if total_removed >= amount_to_remove:
-                break
-
-            cut_start, cut_end = sorted_segments[i]
-            raw_cuts.append((cut_start, cut_end))
-            total_removed += (cut_end - cut_start)
-
-    # Align to downbeats (less aggressive section alignment for more removal)
-    aligned_cuts = []
-    for cut_start, cut_end in raw_cuts:
-        aligned = align_to_downbeats(cut_start, cut_end, downbeats)
-        aligned_cuts.append(aligned)
-
-    # Aggressively merge adjacent cuts
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=1.5)
-
-    # Create fade regions (short crossfades: 75ms)
-    fade_regions = []
-    fade_duration = 0.0375  # ±0.0375s = 75ms total
-    for cut_start, _ in merged_cuts:
-        fade_regions.append((cut_start - fade_duration, cut_start + fade_duration))
-
-    return TrimStrategy(
-        name="aggressive",
-        cut_points=merged_cuts,
-        loop_points=[],
-        fade_regions=fade_regions,
-        target_length=target_length
-    )
 
 
 def generate_trim_strategies(
@@ -747,39 +607,10 @@ def generate_conservative_strategy_with_buffer(
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None
 ) -> TrimStrategy:
-    """Generate conservative strategy with custom buffer."""
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-    
-    if downbeats is None:
-        downbeats = np.array([])
-    if sections is None:
-        sections = []
-    
-    amount_to_remove = max(0, original_length - target_length - buffer)
-    raw_cuts = select_middle_region_cuts(
-        clusters, sections, original_length, amount_to_remove,
-        prioritize_chorus_preservation=True
-    )
-    
-    aligned_cuts = []
-    for cut_start, cut_end in raw_cuts:
-        aligned = align_to_section_boundaries(cut_start, cut_end, sections, downbeats)
-        aligned_cuts.append(aligned)
-    
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=3.0)
-    
-    fade_regions = []
-    fade_duration = 0.15
-    for cut_start, _ in merged_cuts:
-        fade_regions.append((cut_start - fade_duration, cut_start + fade_duration))
-    
-    return TrimStrategy(
-        name="conservative",
-        cut_points=merged_cuts,
-        loop_points=[],
-        fade_regions=fade_regions,
-        target_length=target_length
+    """Generate conservative strategy with custom buffer (delegates to generate_strategy)."""
+    return generate_strategy(
+        "conservative", clusters, original_length, target_length,
+        buffer, sections, downbeats, regenerate_seed
     )
 
 
@@ -792,39 +623,10 @@ def generate_balanced_strategy_with_buffer(
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None
 ) -> TrimStrategy:
-    """Generate balanced strategy with custom buffer."""
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-    
-    if downbeats is None:
-        downbeats = np.array([])
-    if sections is None:
-        sections = []
-    
-    amount_to_remove = max(0, original_length - target_length - buffer)
-    raw_cuts = select_middle_region_cuts(
-        clusters, sections, original_length, amount_to_remove,
-        prioritize_chorus_preservation=True
-    )
-    
-    aligned_cuts = []
-    for cut_start, cut_end in raw_cuts:
-        aligned = align_to_section_boundaries(cut_start, cut_end, sections, downbeats)
-        aligned_cuts.append(aligned)
-    
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=2.0)
-    
-    fade_regions = []
-    fade_duration = 0.25
-    for cut_start, _ in merged_cuts:
-        fade_regions.append((cut_start - fade_duration, cut_start + fade_duration))
-    
-    return TrimStrategy(
-        name="balanced",
-        cut_points=merged_cuts,
-        loop_points=[],
-        fade_regions=fade_regions,
-        target_length=target_length
+    """Generate balanced strategy with custom buffer (delegates to generate_strategy)."""
+    return generate_strategy(
+        "balanced", clusters, original_length, target_length,
+        buffer, sections, downbeats, regenerate_seed
     )
 
 
@@ -837,37 +639,8 @@ def generate_aggressive_strategy_with_buffer(
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None
 ) -> TrimStrategy:
-    """Generate aggressive strategy with custom buffer."""
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-    
-    if downbeats is None:
-        downbeats = np.array([])
-    if sections is None:
-        sections = []
-    
-    amount_to_remove = max(0, original_length - target_length - buffer)
-    raw_cuts = select_middle_region_cuts(
-        clusters, sections, original_length, amount_to_remove,
-        prioritize_chorus_preservation=True
-    )
-    
-    aligned_cuts = []
-    for cut_start, cut_end in raw_cuts:
-        aligned = align_to_downbeats(cut_start, cut_end, downbeats)
-        aligned_cuts.append(aligned)
-    
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=1.0)
-    
-    fade_regions = []
-    fade_duration = 0.3
-    for cut_start, _ in merged_cuts:
-        fade_regions.append((cut_start - fade_duration, cut_start + fade_duration))
-    
-    return TrimStrategy(
-        name="aggressive",
-        cut_points=merged_cuts,
-        loop_points=[],
-        fade_regions=fade_regions,
-        target_length=target_length
+    """Generate aggressive strategy with custom buffer (delegates to generate_strategy)."""
+    return generate_strategy(
+        "aggressive", clusters, original_length, target_length,
+        buffer, sections, downbeats, regenerate_seed
     )
