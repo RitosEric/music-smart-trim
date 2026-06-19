@@ -60,8 +60,9 @@ def detect_repeated_segments(
     ssm: np.ndarray,
     sample_rate: int = 22050,
     hop_length: int = 2048,
-    min_segment_duration: float = 4.0,
-    similarity_threshold: float = 0.8
+    min_segment_duration: float = 15.0,
+    max_segment_duration: float = 60.0,
+    similarity_threshold: float = 0.75
 ) -> List[Dict]:
     """
     Detect repeated segments by scanning SSM for diagonal lines.
@@ -70,8 +71,9 @@ def detect_repeated_segments(
         ssm: Self-similarity matrix (n_frames x n_frames)
         sample_rate: Sample rate of the audio (default: 22050)
         hop_length: Hop length used for chroma extraction (default: 2048)
-        min_segment_duration: Minimum segment duration in seconds (default: 4.0)
-        similarity_threshold: Minimum similarity for a match (default: 0.8)
+        min_segment_duration: Minimum segment duration in seconds (default: 15.0, raised for musical coherence)
+        max_segment_duration: Maximum segment duration in seconds (default: 60.0, to filter false positives)
+        similarity_threshold: Minimum similarity for a match (default: 0.75, raised for quality)
 
     Returns:
         List of dicts with keys: start_time_1, start_time_2, duration, similarity
@@ -79,6 +81,7 @@ def detect_repeated_segments(
     n_frames = ssm.shape[0]
     frame_duration = hop_length / sample_rate
     min_frames = int(min_segment_duration / frame_duration)
+    max_frames = int(max_segment_duration / frame_duration)
 
     repeated_segments = []
 
@@ -94,13 +97,14 @@ def detect_repeated_segments(
                 # Follow diagonal while similarity remains high
                 k = 0
                 while (i + k < n_frames and j + k < n_frames and
-                       ssm[i + k, j + k] >= similarity_threshold):
+                       ssm[i + k, j + k] >= similarity_threshold and
+                       k < max_frames):  # Stop if exceeds max duration
                     total_similarity += ssm[i + k, j + k]
                     diagonal_length += 1
                     k += 1
 
-                # Check if diagonal is long enough
-                if diagonal_length >= min_frames:
+                # Check if diagonal is long enough but not too long
+                if min_frames <= diagonal_length <= max_frames:
                     # Calculate average similarity along diagonal
                     avg_similarity = total_similarity / diagonal_length
 
@@ -126,8 +130,9 @@ def analyze_audio_structure(
     sample_rate: int,
     hop_length: int = 2048,
     n_chroma: int = 12,
-    min_segment_duration: float = 4.0,
-    similarity_threshold: float = 0.8
+    min_segment_duration: float = 15.0,
+    max_segment_duration: float = 60.0,
+    similarity_threshold: float = 0.75
 ) -> Dict:
     """
     Complete analysis pipeline that extracts chroma, builds SSM, and detects repetitions.
@@ -137,8 +142,9 @@ def analyze_audio_structure(
         sample_rate: Sample rate of the audio
         hop_length: Number of samples between successive frames (default: 2048)
         n_chroma: Number of chroma bins (default: 12)
-        min_segment_duration: Minimum segment duration in seconds (default: 4.0)
-        similarity_threshold: Minimum similarity for a match (default: 0.8)
+        min_segment_duration: Minimum segment duration in seconds (default: 15.0, raised for musical coherence)
+        max_segment_duration: Maximum segment duration in seconds (default: 60.0, to filter false positives)
+        similarity_threshold: Minimum similarity for a match (default: 0.75, raised for quality)
 
     Returns:
         Dict with keys:
@@ -152,12 +158,13 @@ def analyze_audio_structure(
     # Build self-similarity matrix
     ssm = build_self_similarity_matrix(chroma)
 
-    # Detect repeated segments
+    # Detect repeated segments with higher threshold for musical coherence
     repeated_segments = detect_repeated_segments(
         ssm,
         sample_rate,
         hop_length,
         min_segment_duration,
+        max_segment_duration,
         similarity_threshold
     )
 

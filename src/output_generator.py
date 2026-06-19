@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 from src.trim_engine import TrimStrategy
+from src.crossfade import DEFAULT_CROSSFADE_MS, ms_to_samples
 
 
 def _convert_to_serializable(obj: Any) -> Any:
@@ -36,7 +37,10 @@ def _convert_to_serializable(obj: Any) -> Any:
 
 def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]) -> np.ndarray:
     """
-    Apply cuts to audio by removing specified regions.
+    Apply cuts to audio by removing specified regions, with ENHANCED crossfades at boundaries.
+
+    Merges overlapping cut regions before applying.
+    Applies standard constant-power crossfades (500ms) for smoother, more natural transitions.
 
     Args:
         audio: Audio signal as numpy array
@@ -44,7 +48,7 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
         cut_points: List of (start_time, end_time) tuples for sections to remove
 
     Returns:
-        Audio with cut regions removed
+        Audio with cut regions removed and smoothly crossfaded
     """
     if not cut_points:
         return audio.copy()
@@ -52,30 +56,67 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
     # Sort cut points by start time
     sorted_cuts = sorted(cut_points, key=lambda c: c[0])
 
-    # Build segments to keep
+    # Merge overlapping cuts
+    merged_cuts = []
+    current_start, current_end = sorted_cuts[0]
+
+    for start, end in sorted_cuts[1:]:
+        if start <= current_end:
+            # Overlapping or adjacent - merge by extending the end
+            current_end = max(current_end, end)
+        else:
+            # No overlap - save current and start new
+            merged_cuts.append((current_start, current_end))
+            current_start, current_end = start, end
+
+    # Add the last cut
+    merged_cuts.append((current_start, current_end))
+
+    # Build segments to keep with crossfades at boundaries
+    from src.crossfade import constant_power_crossfade, apply_smooth_fade_out, apply_smooth_fade_in
+
     segments = []
     last_end = 0
+    crossfade_samples = ms_to_samples(DEFAULT_CROSSFADE_MS, sr)  # 500ms crossfade for smooth transitions
 
-    for cut_start, cut_end in sorted_cuts:
+    for i, (cut_start, cut_end) in enumerate(merged_cuts):
         cut_start_sample = int(cut_start * sr)
         cut_end_sample = int(cut_end * sr)
 
         # Add segment before cut
         if cut_start_sample > last_end:
-            segments.append(audio[last_end:cut_start_sample])
+            segment = audio[last_end:cut_start_sample]
+
+            # Apply fade-out to end of segment (smooth ending before cut)
+            fade_out_duration = min(crossfade_samples, len(segment) // 2)
+            segment = apply_smooth_fade_out(segment, fade_out_duration)
+
+            segments.append(segment)
 
         # Move past the cut
         last_end = cut_end_sample
 
     # Add final segment after last cut
     if last_end < len(audio):
-        segments.append(audio[last_end:])
+        final_segment = audio[last_end:]
 
-    # Concatenate all segments
-    if segments:
-        return np.concatenate(segments)
-    else:
+        # Apply fade-in to start of final segment (smooth entry after cut)
+        fade_in_duration = min(crossfade_samples, len(final_segment) // 2)
+        final_segment = apply_smooth_fade_in(final_segment, fade_in_duration)
+
+        segments.append(final_segment)
+
+    # Concatenate segments with crossfades between them
+    if len(segments) == 0:
         return np.array([], dtype=audio.dtype)
+    elif len(segments) == 1:
+        return segments[0]
+    else:
+        result = segments[0]
+        for i in range(1, len(segments)):
+            # Apply constant-power crossfade between segments (500ms overlap)
+            result = constant_power_crossfade(result, segments[i], crossfade_samples)
+        return result
 
 
 def apply_loops(audio: np.ndarray, sr: int, loop_points: List[Tuple[float, float, int]]) -> np.ndarray:
@@ -169,19 +210,20 @@ def apply_crossfades(audio: np.ndarray, sr: int, fade_regions: List[Tuple[float,
     return result
 
 
-def render_strategy(strategy: TrimStrategy, audio: np.ndarray, sr: int) -> np.ndarray:
+def render_strategy(strategy: TrimStrategy, audio: np.ndarray, sr: int, beat_info: Dict = None) -> np.ndarray:
     """
-    Render a complete trim strategy by applying loops, cuts, and fades in sequence.
+    Render a complete trim strategy by applying loops, cuts, and constant-power crossfades in sequence.
 
     Order of operations:
     1. Apply loops (extends audio)
     2. Apply cuts (shortens audio)
-    3. Apply fades (smooths transitions)
+    3. Apply constant-power crossfades (smooths transitions)
 
     Args:
         strategy: TrimStrategy with cut_points, loop_points, and fade_regions
         audio: Original audio signal as numpy array
         sr: Sample rate
+        beat_info: Optional dict with tempo, beats for beat-synced crossfading
 
     Returns:
         Rendered audio with strategy applied
@@ -192,8 +234,14 @@ def render_strategy(strategy: TrimStrategy, audio: np.ndarray, sr: int) -> np.nd
     # Step 2: Apply cuts (shortens audio)
     result = apply_cuts(result, sr, strategy.cut_points)
 
-    # Step 3: Apply fades (smooths transitions)
-    result = apply_crossfades(result, sr, strategy.fade_regions)
+    # Step 3: Apply constant-power crossfades (smooths transitions)
+    # Use beat-synced crossfading if beat info is available
+    from src.crossfade import apply_smooth_fade_in, apply_smooth_fade_out
+
+    # Apply fade-in at the beginning (intro) and fade-out at the end (outro)
+    fade_samples = ms_to_samples(DEFAULT_CROSSFADE_MS, sr)  # 500ms fade
+    result = apply_smooth_fade_in(result, fade_samples)
+    result = apply_smooth_fade_out(result, fade_samples)
 
     return result
 
@@ -240,15 +288,15 @@ def generate_outputs(
         # Calculate resulting length
         resulting_length = len(rendered_audio) / sr
 
-        # Format star rating for filename
+        # Format star rating for filename (rounded to 0.1)
         stars = score['star_rating']
 
         # Generate filename: option_{i}_{stars}stars.wav
-        output_filename = f"option_{i}_{stars}stars.wav"
+        output_filename = f"option_{i}_{stars:.1f}stars.wav"
         output_path = output_dir / output_filename
 
-        # Save audio file
-        sf.write(output_path, rendered_audio, sr)
+        # Save audio file with high quality (PCM 16-bit)
+        sf.write(output_path, rendered_audio, sr, subtype='PCM_16')
 
         # Store info for metadata
         rendered_outputs.append({

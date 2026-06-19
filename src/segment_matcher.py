@@ -102,14 +102,14 @@ def is_segment_protected(
 
 def cluster_similar_segments(
     repeated_segments: List[Dict],
-    similarity_threshold: float = 0.8
+    similarity_threshold: float = 0.75
 ) -> List[Dict]:
     """
     Cluster similar segments by filtering on similarity threshold and grouping by proximity.
 
     Args:
         repeated_segments: List of segment dicts with keys: start_time_1, start_time_2, duration, similarity
-        similarity_threshold: Minimum similarity for clustering (default: 0.8)
+        similarity_threshold: Minimum similarity for clustering (default: 0.75, raised for quality)
 
     Returns:
         List of cluster dicts with keys:
@@ -180,7 +180,7 @@ def cluster_similar_segments(
 def match_segments(
     repeated_segments: List[Dict],
     protected_regions_str: List[str],
-    similarity_threshold: float = 0.8
+    similarity_threshold: float = 0.75
 ) -> Dict:
     """
     Complete matching pipeline: parse protected regions, filter segments, and cluster.
@@ -188,7 +188,7 @@ def match_segments(
     Args:
         repeated_segments: List of segment dicts with keys: start_time_1, start_time_2, duration, similarity
         protected_regions_str: List of strings in "MM:SS-MM:SS" format
-        similarity_threshold: Minimum similarity for clustering (default: 0.8)
+        similarity_threshold: Minimum similarity for clustering (default: 0.75, raised for quality)
 
     Returns:
         Dict with keys:

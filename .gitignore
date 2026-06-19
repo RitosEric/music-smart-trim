@@ -135,6 +135,7 @@ Thumbs.db
 
 # Output files
 output/
+output*/
 *.wav
 *.mp3
 *.flac
@@ -143,3 +144,6 @@ output/
 *.ogg
 !tests/fixtures/*.wav
 !tests/fixtures/*.mp3
+
+# Backup files
+*.backup
