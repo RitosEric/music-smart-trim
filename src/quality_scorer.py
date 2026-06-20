@@ -584,7 +584,7 @@ def score_strategy(
 
         # Score loop transition smoothness
         transition_score = score_loop_transitions(
-            original_audio, sr, strategy.loop_points, strategy.fade_regions
+            original_audio, sr, strategy.loop_points
         )
 
         # Optional MERT bonus for loop transitions
@@ -765,26 +765,27 @@ def score_loop_naturalness(
     # 1. Loop Diversity (0-20 points)
     # Penalize repeating the same section multiple times
     unique_sections = set((start, end) for start, end, _ in loop_points)
-    diversity_ratio = len(unique_sections) / max(1, total_loops)
+    diversity_ratio = len(unique_sections) / total_loops
     score += 20.0 * diversity_ratio
 
     # 2. Section Quality (0-15 points)
     # Score based on what sections are being repeated
+    points_per_loop = 5.0 / total_loops  # Pre-calculate to avoid repeated division
     for start, end, repeat_count in loop_points:
         duration = end - start
         relative_start = start / original_length
 
         # Prefer middle sections (avoid intro/outro)
         if 0.15 < relative_start < 0.85:
-            score += 5.0 / max(1, total_loops)  # Distribute across loops
-        
+            score += points_per_loop
+
         # Prefer reasonable durations (12-30s)
         if 12.0 <= duration <= 30.0:
-            score += 5.0 / max(1, total_loops)
-        
+            score += points_per_loop
+
         # Prefer shorter repetitions (2-3x) over excessive (5x+)
         if repeat_count <= 3:
-            score += 5.0 / max(1, total_loops)
+            score += points_per_loop
 
     # 3. Over-repetition Penalty (0-15 points)
     # Penalize if too many total repetitions
@@ -802,8 +803,7 @@ def score_loop_naturalness(
 def score_loop_transitions(
     audio: np.ndarray,
     sr: int,
-    loop_points: List[Tuple[float, float, int]],
-    fade_regions: List[Tuple[float, float]]
+    loop_points: List[Tuple[float, float, int]]
 ) -> float:
     """
     Score transition smoothness at loop boundaries (extension quality).
@@ -817,7 +817,6 @@ def score_loop_transitions(
         audio: Audio data
         sr: Sample rate
         loop_points: List of (start, end, repeat_count) tuples
-        fade_regions: Fade regions for transitions
 
     Returns:
         Score from 0-30 points
@@ -827,6 +826,7 @@ def score_loop_transitions(
 
     score = 0.0
     total_transitions = len(loop_points)
+    points_per_transition = 10.0 / total_transitions  # Pre-calculate to avoid repeated division
 
     for start, end, _ in loop_points:
         # Analyze boundary regions (500ms)
@@ -836,7 +836,7 @@ def score_loop_transitions(
         boundary_samples = int(boundary_duration * sr)
 
         if end_sample - start_sample <= 2 * boundary_samples:
-            score += 10.0 / max(1, total_transitions)
+            score += points_per_transition
             continue
 
         try:
@@ -849,29 +849,29 @@ def score_loop_transitions(
 
             if start_energy > 0 and end_energy > 0:
                 energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
-                score += (10.0 * energy_ratio) / max(1, total_transitions)
+                score += points_per_transition * energy_ratio
 
             # 2. Zero-crossing consistency (0-10 points per transition)
             start_zc = np.sum(librosa.zero_crossings(start_region))
             end_zc = np.sum(librosa.zero_crossings(end_region))
-            
+
             if start_zc > 0 and end_zc > 0:
                 zc_ratio = min(start_zc, end_zc) / max(start_zc, end_zc)
-                score += (10.0 * zc_ratio) / max(1, total_transitions)
+                score += points_per_transition * zc_ratio
 
             # 3. Spectral similarity (0-10 points per transition)
             start_spec = np.abs(librosa.stft(start_region, n_fft=2048))
             end_spec = np.abs(librosa.stft(end_region, n_fft=2048))
-            
+
             start_mean = np.mean(start_spec, axis=1)
             end_mean = np.mean(end_spec, axis=1)
-            
+
             spec_corr = np.corrcoef(start_mean, end_mean)[0, 1]
             if not np.isnan(spec_corr):
-                score += (10.0 * max(0, spec_corr)) / max(1, total_transitions)
+                score += points_per_transition * max(0, spec_corr)
 
         except Exception:
-            score += 10.0 / max(1, total_transitions)  # Neutral if analysis fails
+            score += points_per_transition  # Neutral if analysis fails
 
     return min(30.0, score)
 

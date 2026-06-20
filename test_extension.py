@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.audio_loader import load_audio
 from src.spectral_analyzer import analyze_audio_structure
 from src.structure_analyzer import analyze_structure
-from src.trim_engine import generate_extension_strategies
+from src.extension_strategies import generate_diverse_extension_strategies
 from src.output_generator import render_strategy
 from src.quality_scorer import score_strategy
 
@@ -55,15 +55,14 @@ def test_extension_feature():
     # Generate extension strategies
     print("\n3. Generating extension strategies...")
     try:
-        strategies = generate_extension_strategies(
-            clusters=[],  # Not needed for extension
+        strategies = generate_diverse_extension_strategies(
             original_length=original_length,
             target_length=target_length,
             sections=structure['sections'],
             downbeats=structure['beat_info']['downbeats'],
             audio_data=audio_data,
             sample_rate=sample_rate,
-            num_strategies=3
+            num_strategies=5
         )
         print(f"   ✓ Generated {len(strategies)} strategies")
 

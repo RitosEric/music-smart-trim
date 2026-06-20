@@ -646,6 +646,45 @@ def generate_aggressive_strategy_with_buffer(
     )
 
 
+def analyze_boundary_energy(
+    audio: np.ndarray,
+    sr: int,
+    start: float,
+    end: float,
+    boundary_duration: float = 0.5
+) -> Tuple[float, float]:
+    """
+    Extract and calculate RMS energy for start/end boundaries of a section.
+
+    Args:
+        audio: Audio data array
+        sr: Sample rate
+        start: Section start time in seconds
+        end: Section end time in seconds
+        boundary_duration: Duration of boundary regions to analyze (default: 0.5s)
+
+    Returns:
+        Tuple of (start_energy, end_energy) as RMS values
+    """
+    start_sample = int(start * sr)
+    end_sample = int(end * sr)
+    boundary_samples = int(boundary_duration * sr)
+
+    # Check if section is long enough for boundary analysis
+    if end_sample - start_sample <= 2 * boundary_samples:
+        return 0.0, 0.0
+
+    # Extract boundary regions
+    start_region = audio[start_sample:start_sample + boundary_samples]
+    end_region = audio[end_sample - boundary_samples:end_sample]
+
+    # Calculate RMS energy
+    start_energy = np.sqrt(np.mean(start_region ** 2))
+    end_energy = np.sqrt(np.mean(end_region ** 2))
+
+    return start_energy, end_energy
+
+
 def score_section_repeatability(
     section: Dict,
     audio: np.ndarray,
@@ -719,26 +758,15 @@ def score_section_repeatability(
 
     # 4. Energy Consistency at Boundaries (0.0-0.2)
     try:
-        # Extract boundary regions (500ms at start and end)
-        boundary_duration = 0.5  # 500ms
-        start_sample = int(start * sr)
-        end_sample = int(end * sr)
-        boundary_samples = int(boundary_duration * sr)
+        # Use shared helper function for boundary analysis
+        start_energy, end_energy = analyze_boundary_energy(audio, sr, start, end, boundary_duration=0.5)
 
-        if end_sample - start_sample > 2 * boundary_samples:
-            start_region = audio[start_sample:start_sample + boundary_samples]
-            end_region = audio[end_sample - boundary_samples:end_sample]
-
-            # Calculate RMS energy for both boundaries
-            start_energy = np.sqrt(np.mean(start_region ** 2))
-            end_energy = np.sqrt(np.mean(end_region ** 2))
-
-            # Similar energy at boundaries = better loop point
-            if start_energy > 0 and end_energy > 0:
-                energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
-                score += 0.2 * energy_ratio  # 0-0.2 based on similarity
-            else:
-                score += 0.05  # Silent boundaries
+        # Similar energy at boundaries = better loop point
+        if start_energy > 0 and end_energy > 0:
+            energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
+            score += 0.2 * energy_ratio  # 0-0.2 based on similarity
+        else:
+            score += 0.05  # Silent boundaries
     except Exception:
         score += 0.1  # Neutral score if boundary analysis fails
 
@@ -767,7 +795,7 @@ def generate_extension_strategy(
     - Apply crossfades for smooth transitions
 
     Args:
-        clusters: List of cluster dicts (not heavily used for extension)
+        clusters: List of cluster dicts (unused in extension, kept for API consistency with trim mode)
         original_length: Original audio length in seconds
         target_length: Target length in seconds (must be > original_length)
         sections: List of section dicts with start, end, label
@@ -833,17 +861,18 @@ def generate_extension_strategy(
     loop_points = []
     total_extension = 0.0
     section_repeat_counts = {}  # Track how many times each section is repeated
+    section_index = 0  # Track position in sorted list
 
-    while total_extension < extension_needed and section_scores:
+    while total_extension < extension_needed and section_index < len(section_scores):
         # Get best remaining section
-        best = section_scores[0]
+        best = section_scores[section_index]
         section = best['section']
         section_id = f"{section['start']}-{section['end']}"
 
         # Check if we've hit max repeats for this section
         current_repeats = section_repeat_counts.get(section_id, 0)
         if current_repeats >= params["max_repeats_per_section"]:
-            section_scores.pop(0)  # Remove from candidates
+            section_index += 1  # Move to next candidate
             continue
 
         # Add one repetition of this section
@@ -853,7 +882,7 @@ def generate_extension_strategy(
         # Don't add if it would overshoot by more than 30%
         if duration > remaining_extension * 1.3:
             # Try next best section
-            section_scores.pop(0)
+            section_index += 1  # Move to next candidate
             continue
 
         # Align to section boundaries

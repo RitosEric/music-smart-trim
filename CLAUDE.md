@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Music Smart Trim intelligently shortens music to target length using spectral analysis, section-aware cutting with chorus preservation, and optional MERT embeddings for quality assessment (V7).
+Music Smart Trim intelligently shortens or extends music to target length using spectral analysis, section-aware editing with diverse strategy generation, and optional MERT embeddings for quality assessment.
+
+**Current Version: V8**
+- Extension mode with 5 diverse strategies, best-selection
+- Code cleanup: removed duplicates, optimized performance
+- Trim mode: 10 strategies generated, top 3 shown to user
 
 ## Setup
 
@@ -49,23 +54,27 @@ python test_extension.py
 rm -rf output* __pycache__ .pytest_cache
 ```
 
-**Note:** CLI includes interactive regeneration loop - after generating top 3 options (from 10 candidates), prompts "Generate alternative options? (y/n)" to try different strategies with exclusion of previously shown options.
+**Note:** 
+- **Extension mode**: Generates 5 diverse strategies, automatically selects and outputs best one
+- **Trim mode**: Generates 10 strategies, shows top 3, prompts for regeneration to explore alternatives
 
-## Architecture (7-Stage Pipeline, 8 Modules)
+## Architecture (7-Stage Pipeline, 9 Modules)
 
 ```
 Audio → audio_loader → spectral_analyzer → structure_analyzer
-  → segment_matcher → trim_engine → quality_scorer → output_generator → CLI
+  → segment_matcher → [trim_engine OR extension_strategies] 
+  → quality_scorer → output_generator → CLI
 ```
 
 **Modules:**
 - `audio_loader`: Load, normalize to 22050Hz mono
 - `spectral_analyzer`: Detect repetitions (SSM, min 15s, threshold 0.75)
-- `structure_analyzer`: Detect beats, tempo, label sections (intro/verse/chorus/bridge/outro) with repetition counts (V7)
+- `structure_analyzer`: Detect beats, tempo, label sections (intro/verse/chorus/bridge/outro) with repetition counts
 - `segment_matcher`: Cluster and filter segments
-- `trim_engine`: Generate 10 diverse strategies, select top 3 by quality (V6); section-aware with chorus preservation (V7)
-- `quality_scorer`: Enhanced heuristics + optional MERT embeddings (V5)
-- `crossfade`: Constant-power crossfades (500ms in V7)
+- `trim_engine`: Generate 10 diverse trim strategies, select top 3 by quality; section-aware with chorus preservation
+- `extension_strategies`: Generate 5 diverse extension strategies using different selection methods (best-first, position-varied, duration-balanced, diversity-focused, conservative) (V8)
+- `quality_scorer`: Enhanced heuristics + optional MERT embeddings; includes loop-specific scoring for extension
+- `crossfade`: Constant-power crossfades (500ms)
 - `output_generator`: Render with crossfades, save files
 
 ## Key Features (V7)
@@ -161,7 +170,8 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 
 ## Version History
 
-- **V7** (Current): Intelligent chorus preservation + 500ms crossfades + section-aware priority system
+- **V8** (Current): Extension mode with 5 diverse strategies + code cleanup + automatic best-selection
+- **V7**: Intelligent chorus preservation + 500ms crossfades + section-aware priority system
 - **V6**: Generate 10 strategies, show top 3 by quality + regeneration with exclusion
 - **V5**: Enhanced quality scoring + strict ±15s + MERT embeddings + normalized 0.0-5.0★ scale + 3.5★ threshold
 - **V4**: Section-aware cutting + back-to-back cuts + radio edit strategy
@@ -169,16 +179,27 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **V2**: Quality scoring improvements
 - **V1**: Initial release
 
-## Recent Changes (V7)
+## Recent Changes
 
-**V8 Features (Extension Mode):**
+**V8 Features (Extension Mode & Code Cleanup):**
 - ✅ Audio extension by repeating sections (target > original length)
+- ✅ **Diverse strategy generation**: 5 truly different extension strategies using varied selection methods
+  - Best-first: Always pick highest-scoring sections
+  - Diversity-focused: Alternate between high/medium scoring sections
+  - Duration-balanced: Prefer varied section lengths
+  - Position-varied: Pick sections from different song positions
+  - Conservative: Fewer loops with more repetitions each
+- ✅ **Automatic best-selection**: Scores all 5, outputs only the best (no user choice needed)
+- ✅ **Code cleanup**: 
+  - Removed duplicate boundary analysis code (extracted to shared helper)
+  - Fixed inefficient O(n²) list operations → O(n) with indexing
+  - Removed redundant calculations (pre-calculate division factors)
+  - Removed unused function parameters
 - ✅ Section repeatability scoring (chorus > verse > bridge, energy consistency)
 - ✅ Loop quality scoring (naturalness, transition smoothness, over-repetition penalty)
 - ✅ Automatic mode detection (trim vs extend based on target length)
 - ✅ MERT-based loop transition scoring (optional)
-- ✅ Multiple extension strategies (conservative/balanced/aggressive: 2x/3x/5x max repeats)
-- ✅ See `test_extension.py` for usage examples
+- ✅ See `test_extension.py` and `src/extension_strategies.py` for implementation
 
 **V7 Features:**
 - ✅ Chorus detection with repetition counting (integrated with spectral analyzer)
