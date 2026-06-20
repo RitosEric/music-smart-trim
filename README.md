@@ -1,19 +1,21 @@
 # Music Smart Trim
 
-Intelligently shorten audio files while preserving musical quality and structure. Music Smart Trim analyzes audio, detects repeated segments, and generates multiple trim options with quality ratings, using **beat-aligned cutting**, **section-aware editing**, and **constant-power crossfading** for professional results.
+Intelligently shorten **or extend** audio files while preserving musical quality and structure. Music Smart Trim analyzes audio, detects repeated segments, and generates multiple trim/extension options with quality ratings, using **beat-aligned editing**, **section-aware processing**, and **constant-power crossfading** for professional results.
 
 ## Features
 
+- **Bidirectional Processing**: Both trim (shorten) and extend (lengthen) audio
+- **Intelligent Loop Selection**: Extends audio by repeating high-quality sections (choruses, hooks)
 - **Intelligent Analysis**: Detects repeated segments using spectral analysis (15s+ phrases, 0.75 similarity)
-- **Section-Aware Cutting**: Aligns cuts to song sections (intro/verse/chorus/bridge/outro) and bar boundaries
+- **Section-Aware Editing**: Aligns cuts/loops to song sections (intro/verse/chorus/bridge/outro) and bar boundaries
 - **Strict Length Control**: ±15s accuracy through iterative refinement (V5)
 - **Enhanced Quality Scoring**: Spectral flux, loudness consistency, and optional MERT embeddings (V5)
-- **Beat-Aligned Editing**: All cuts aligned to bar boundaries, maintains rhythmic flow
+- **Beat-Aligned Editing**: All cuts and loops aligned to bar boundaries, maintains rhythmic flow
 - **Constant-Power Crossfading**: Professional DJ-quality seamless transitions (500ms)
-- **Multiple Strategies**: Generates 3 trim options (conservative, balanced, aggressive)
+- **Multiple Strategies**: Generates 10 diverse options (conservative, balanced, aggressive)
 - **Quality Ratings**: Each option rated 0.0-5.0 stars (0.1 increments) based on coherence, transitions, and length
 - **Protected Regions**: Automatically protects intro/outro, supports custom protection
-- **Interactive Regeneration**: Generate alternative options with different trim strategies
+- **Interactive Regeneration**: Generate alternative options with different strategies
 
 ## What's New in V5 (Enhanced Quality & Strict Length Control)
 
@@ -61,12 +63,41 @@ pip install -e .
 
 ## Usage
 
-### Basic Usage
+### Basic Usage (Trimming)
 
 Trim audio to target length:
 
 ```bash
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 120
+```
+
+### Audio Extension (NEW!)
+
+Extend audio by repeating high-quality sections (e.g., choruses):
+
+```bash
+# Extend a 120s song to 180s (adds 60s by looping choruses)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 180
+```
+
+The tool automatically detects extension mode when `target > original_length` and:
+- Scores sections for repeatability (prefers choruses > verses > bridges)
+- Selects best sections to loop based on energy consistency
+- Aligns loops to section boundaries and downbeats
+- Applies smooth crossfades at loop points
+- Avoids over-repetition (distributes loops across multiple sections)
+
+**Extension Example Output:**
+```
+🔄 EXTENSION MODE: Extending audio by 60.0s (120.0s → 180.0s)
+Generating 10 diverse extension strategies...
+
+Strategy loop details:
+  extension_conservative_1: 3 loops (+58.2s added): [45.3-60.1s×2, 75.0-88.5s×2, 45.3-60.1s×2]
+  extension_balanced_1: 4 loops (+61.5s added): [45.3-60.1s×3, 75.0-88.5s×2, ...]
+
+✨ Best strategy selected:
+  extension_balanced_2 - 4.1★
 ```
 
 ### With MERT Embeddings (Better Quality)

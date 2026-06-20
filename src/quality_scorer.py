@@ -573,33 +573,52 @@ def score_strategy(
     else:
         resulting_length = strategy.calculate_resulting_length(original_length)
 
-    # Score musical coherence (50 points max) - MOST IMPORTANT
-    # Use ORIGINAL audio with cut_points to score the strategy design
-    coherence_score = score_musical_coherence(
-        original_audio, sr, strategy.cut_points, original_length
-    )
+    # Detect if this is an extension strategy (has loops) or trim strategy (has cuts)
+    is_extension = len(strategy.loop_points) > 0 and len(strategy.cut_points) == 0
 
-    # Optional: Add MERT embedding similarity bonus (up to 5 extra points)
-    if use_mert and len(strategy.cut_points) > 0:
-        mert_bonus = score_mert_transitions(original_audio, sr, strategy.cut_points, device)
-        if mert_bonus is not None:
-            # Add bonus to coherence (capped at 50 points total)
-            coherence_score = min(50.0, coherence_score + mert_bonus)
+    if is_extension:
+        # Extension scoring: evaluate loop naturalness
+        coherence_score = score_loop_naturalness(
+            original_audio, sr, strategy.loop_points, original_length
+        )
 
-    # Score transition smoothness (30 points max) - ENHANCED
-    # Base score from phase alignment and zero-crossings
-    transition_score = score_transition_smoothness(
-        original_audio, sr, strategy.cut_points, strategy.fade_regions
-    )
-    # Rescale from 40 points to 20 points (make room for enhanced heuristics)
-    transition_score = (transition_score / 40.0) * 20.0
+        # Score loop transition smoothness
+        transition_score = score_loop_transitions(
+            original_audio, sr, strategy.loop_points, strategy.fade_regions
+        )
 
-    # Add enhanced heuristics (10 points total)
-    spectral_flux_score = score_spectral_flux(original_audio, sr, strategy.cut_points)
-    loudness_score = score_loudness_consistency(original_audio, sr, strategy.cut_points)
+        # Optional MERT bonus for loop transitions
+        if use_mert:
+            mert_bonus = score_mert_loop_transitions(original_audio, sr, strategy.loop_points, device)
+            if mert_bonus is not None:
+                coherence_score = min(50.0, coherence_score + mert_bonus)
+    else:
+        # Trim scoring: existing logic
+        coherence_score = score_musical_coherence(
+            original_audio, sr, strategy.cut_points, original_length
+        )
 
-    # Combine: 20 points base + 5 points spectral flux + 5 points loudness = 30 points
-    transition_score = transition_score + (spectral_flux_score * 0.5) + (loudness_score * 0.5)
+        # Optional: Add MERT embedding similarity bonus (up to 5 extra points)
+        if use_mert and len(strategy.cut_points) > 0:
+            mert_bonus = score_mert_transitions(original_audio, sr, strategy.cut_points, device)
+            if mert_bonus is not None:
+                # Add bonus to coherence (capped at 50 points total)
+                coherence_score = min(50.0, coherence_score + mert_bonus)
+
+        # Score transition smoothness (30 points max) - ENHANCED
+        # Base score from phase alignment and zero-crossings
+        transition_score = score_transition_smoothness(
+            original_audio, sr, strategy.cut_points, strategy.fade_regions
+        )
+        # Rescale from 40 points to 20 points (make room for enhanced heuristics)
+        transition_score = (transition_score / 40.0) * 20.0
+
+        # Add enhanced heuristics (10 points total)
+        spectral_flux_score = score_spectral_flux(original_audio, sr, strategy.cut_points)
+        loudness_score = score_loudness_consistency(original_audio, sr, strategy.cut_points)
+
+        # Combine: 20 points base + 5 points spectral flux + 5 points loudness = 30 points
+        transition_score = transition_score + (spectral_flux_score * 0.5) + (loudness_score * 0.5)
 
     # Score length accuracy (20 points max) - STRICT ±15s
     length_score = score_length_accuracy(
@@ -711,3 +730,219 @@ def points_to_stars(points: float) -> float:
 
     # Clamp to valid range
     return max(0.0, min(5.0, stars))
+
+
+def score_loop_naturalness(
+    audio: np.ndarray,
+    sr: int,
+    loop_points: List[Tuple[float, float, int]],
+    original_length: float
+) -> float:
+    """
+    Score how natural the loop repetitions are (extension quality).
+
+    Evaluates:
+    - Loop diversity (not repeating same section too much)
+    - Section quality (prefer choruses, avoid intro/outro)
+    - Loop length appropriateness
+    - Over-repetition penalty
+
+    Args:
+        audio: Audio data
+        sr: Sample rate
+        loop_points: List of (start, end, repeat_count) tuples
+        original_length: Original audio length
+
+    Returns:
+        Score from 0-50 points
+    """
+    if not loop_points:
+        return 25.0  # Neutral score for no loops
+
+    score = 0.0
+    total_loops = len(loop_points)
+
+    # 1. Loop Diversity (0-20 points)
+    # Penalize repeating the same section multiple times
+    unique_sections = set((start, end) for start, end, _ in loop_points)
+    diversity_ratio = len(unique_sections) / max(1, total_loops)
+    score += 20.0 * diversity_ratio
+
+    # 2. Section Quality (0-15 points)
+    # Score based on what sections are being repeated
+    for start, end, repeat_count in loop_points:
+        duration = end - start
+        relative_start = start / original_length
+
+        # Prefer middle sections (avoid intro/outro)
+        if 0.15 < relative_start < 0.85:
+            score += 5.0 / max(1, total_loops)  # Distribute across loops
+        
+        # Prefer reasonable durations (12-30s)
+        if 12.0 <= duration <= 30.0:
+            score += 5.0 / max(1, total_loops)
+        
+        # Prefer shorter repetitions (2-3x) over excessive (5x+)
+        if repeat_count <= 3:
+            score += 5.0 / max(1, total_loops)
+
+    # 3. Over-repetition Penalty (0-15 points)
+    # Penalize if too many total repetitions
+    total_repetitions = sum(count for _, _, count in loop_points)
+    if total_repetitions <= 6:
+        score += 15.0  # Good: not too repetitive
+    elif total_repetitions <= 10:
+        score += 10.0  # Acceptable
+    else:
+        score += 5.0  # Too repetitive
+
+    return min(50.0, score)
+
+
+def score_loop_transitions(
+    audio: np.ndarray,
+    sr: int,
+    loop_points: List[Tuple[float, float, int]],
+    fade_regions: List[Tuple[float, float]]
+) -> float:
+    """
+    Score transition smoothness at loop boundaries (extension quality).
+
+    Evaluates:
+    - Energy consistency at loop start/end
+    - Spectral similarity at boundaries
+    - Zero-crossing alignment
+
+    Args:
+        audio: Audio data
+        sr: Sample rate
+        loop_points: List of (start, end, repeat_count) tuples
+        fade_regions: Fade regions for transitions
+
+    Returns:
+        Score from 0-30 points
+    """
+    if not loop_points:
+        return 15.0  # Neutral score
+
+    score = 0.0
+    total_transitions = len(loop_points)
+
+    for start, end, _ in loop_points:
+        # Analyze boundary regions (500ms)
+        boundary_duration = 0.5
+        start_sample = int(start * sr)
+        end_sample = int(end * sr)
+        boundary_samples = int(boundary_duration * sr)
+
+        if end_sample - start_sample <= 2 * boundary_samples:
+            score += 10.0 / max(1, total_transitions)
+            continue
+
+        try:
+            start_region = audio[start_sample:start_sample + boundary_samples]
+            end_region = audio[end_sample - boundary_samples:end_sample]
+
+            # 1. Energy consistency (0-10 points per transition)
+            start_energy = np.sqrt(np.mean(start_region ** 2))
+            end_energy = np.sqrt(np.mean(end_region ** 2))
+
+            if start_energy > 0 and end_energy > 0:
+                energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
+                score += (10.0 * energy_ratio) / max(1, total_transitions)
+
+            # 2. Zero-crossing consistency (0-10 points per transition)
+            start_zc = np.sum(librosa.zero_crossings(start_region))
+            end_zc = np.sum(librosa.zero_crossings(end_region))
+            
+            if start_zc > 0 and end_zc > 0:
+                zc_ratio = min(start_zc, end_zc) / max(start_zc, end_zc)
+                score += (10.0 * zc_ratio) / max(1, total_transitions)
+
+            # 3. Spectral similarity (0-10 points per transition)
+            start_spec = np.abs(librosa.stft(start_region, n_fft=2048))
+            end_spec = np.abs(librosa.stft(end_region, n_fft=2048))
+            
+            start_mean = np.mean(start_spec, axis=1)
+            end_mean = np.mean(end_spec, axis=1)
+            
+            spec_corr = np.corrcoef(start_mean, end_mean)[0, 1]
+            if not np.isnan(spec_corr):
+                score += (10.0 * max(0, spec_corr)) / max(1, total_transitions)
+
+        except Exception:
+            score += 10.0 / max(1, total_transitions)  # Neutral if analysis fails
+
+    return min(30.0, score)
+
+
+def score_mert_loop_transitions(
+    audio: np.ndarray,
+    sr: int,
+    loop_points: List[Tuple[float, float, int]],
+    device: str = "cpu"
+) -> Optional[float]:
+    """
+    Score loop transition quality using MERT embeddings (optional enhancement).
+
+    Args:
+        audio: Audio data
+        sr: Sample rate
+        loop_points: List of (start, end, repeat_count) tuples
+        device: Device for MERT inference
+
+    Returns:
+        Bonus score from 0-5 points, or None if MERT unavailable
+    """
+    if not loop_points or not _MERT_AVAILABLE:
+        return None
+
+    model, processor = load_mert_model(device)
+    if model is None or processor is None:
+        return None
+
+    try:
+        import torch
+
+        total_similarity = 0.0
+        num_transitions = 0
+
+        for start, end, _ in loop_points:
+            # Extract boundary regions (1 second each)
+            boundary_duration = 1.0
+            start_sample = int(start * sr)
+            end_sample = int(end * sr)
+            boundary_samples = int(boundary_duration * sr)
+
+            if end_sample - start_sample <= 2 * boundary_samples:
+                continue
+
+            start_region = audio[start_sample:start_sample + boundary_samples]
+            end_region = audio[end_sample - boundary_samples:end_sample]
+
+            # Get MERT embeddings
+            with torch.no_grad():
+                start_inputs = processor(start_region, sampling_rate=sr, return_tensors="pt")
+                end_inputs = processor(end_region, sampling_rate=sr, return_tensors="pt")
+
+                start_inputs = {k: v.to(device) for k, v in start_inputs.items()}
+                end_inputs = {k: v.to(device) for k, v in end_inputs.items()}
+
+                start_embed = model(**start_inputs).last_hidden_state.mean(dim=1).cpu().numpy().flatten()
+                end_embed = model(**end_inputs).last_hidden_state.mean(dim=1).cpu().numpy().flatten()
+
+            # Cosine similarity
+            similarity = np.dot(start_embed, end_embed) / (
+                np.linalg.norm(start_embed) * np.linalg.norm(end_embed) + 1e-10
+            )
+            total_similarity += max(0, similarity)
+            num_transitions += 1
+
+        if num_transitions > 0:
+            avg_similarity = total_similarity / num_transitions
+            return 5.0 * avg_similarity  # 0-5 bonus points
+        
+    except Exception as e:
+        print(f"⚠️  MERT loop scoring failed: {e}")
+
+    return None

@@ -24,8 +24,11 @@ pip install -e .
 ## Quick Commands
 
 ```bash
-# Run (basic)
+# Run (basic trim)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 120
+
+# Run (extend audio by repeating sections)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 180
 
 # Run (with MERT embeddings for better quality - recommended)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert
@@ -38,6 +41,9 @@ pytest tests/ -v
 
 # Run single test file
 pytest tests/test_audio_loader.py -v
+
+# Test extension feature
+python test_extension.py
 
 # Clean output directories
 rm -rf output* __pycache__ .pytest_cache
@@ -164,6 +170,15 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **V1**: Initial release
 
 ## Recent Changes (V7)
+
+**V8 Features (Extension Mode):**
+- ✅ Audio extension by repeating sections (target > original length)
+- ✅ Section repeatability scoring (chorus > verse > bridge, energy consistency)
+- ✅ Loop quality scoring (naturalness, transition smoothness, over-repetition penalty)
+- ✅ Automatic mode detection (trim vs extend based on target length)
+- ✅ MERT-based loop transition scoring (optional)
+- ✅ Multiple extension strategies (conservative/balanced/aggressive: 2x/3x/5x max repeats)
+- ✅ See `test_extension.py` for usage examples
 
 **V7 Features:**
 - ✅ Chorus detection with repetition counting (integrated with spectral analyzer)

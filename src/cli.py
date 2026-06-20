@@ -9,7 +9,7 @@ from typing import List, Dict, Optional, Tuple
 from src.audio_loader import load_audio, AudioLoadError
 from src.spectral_analyzer import analyze_audio_structure
 from src.segment_matcher import match_segments
-from src.trim_engine import generate_trim_strategies
+from src.trim_engine import generate_trim_strategies, generate_extension_strategies
 from src.quality_scorer import score_strategy
 from src.output_generator import generate_outputs
 
@@ -237,28 +237,60 @@ def run_pipeline(
     print(f"Identified {len(clusters)} segment clusters")
     print(f"Protected regions: {len(protected_regions_parsed)}")
 
-    # Stage 4: Generate 10 diverse trim strategies (with section awareness)
-    print("Generating 10 diverse trim strategies...")
-    all_strategies = generate_trim_strategies(
-        clusters,
-        original_length,
-        target_length,
-        sections=structure['sections'],
-        downbeats=structure['beat_info']['downbeats'],
-        regenerate_seed=regenerate_seed,
-        num_strategies=10
-    )
+    # Stage 4: Detect extend vs trim mode and generate strategies
+    is_extending = target_length > original_length
+
+    if is_extending:
+        # Extension mode: repeat sections to reach target length
+        extension_needed = target_length - original_length
+        print(f"\n🔄 EXTENSION MODE: Extending audio by {extension_needed:.1f}s ({original_length:.1f}s → {target_length:.1f}s)")
+        print("Generating 10 diverse extension strategies...")
+        all_strategies = generate_extension_strategies(
+            clusters,
+            original_length,
+            target_length,
+            sections=structure['sections'],
+            downbeats=structure['beat_info']['downbeats'],
+            audio_data=audio_data,
+            sample_rate=sample_rate,
+            regenerate_seed=regenerate_seed,
+            num_strategies=10
+        )
+    else:
+        # Trim mode: remove repeated sections to reach target length
+        trim_needed = original_length - target_length
+        print(f"\n✂️  TRIM MODE: Shortening audio by {trim_needed:.1f}s ({original_length:.1f}s → {target_length:.1f}s)")
+        print("Generating 10 diverse trim strategies...")
+        all_strategies = generate_trim_strategies(
+            clusters,
+            original_length,
+            target_length,
+            sections=structure['sections'],
+            downbeats=structure['beat_info']['downbeats'],
+            regenerate_seed=regenerate_seed,
+            num_strategies=10
+        )
     print(f"Generated {len(all_strategies)} strategies")
 
-    # DEBUG: Show cut point differences
-    print("\nStrategy cut details:")
-    for strategy in all_strategies:
-        if strategy.cut_points:
-            cut_summary = ", ".join([f"{start:.1f}-{end:.1f}s" for start, end in strategy.cut_points])
-            total_cut = sum(end - start for start, end in strategy.cut_points)
-            print(f"  {strategy.name}: {len(strategy.cut_points)} cuts ({total_cut:.1f}s removed): [{cut_summary}]")
-        else:
-            print(f"  {strategy.name}: No cuts")
+    # DEBUG: Show strategy details (cuts for trim, loops for extend)
+    if is_extending:
+        print("\nStrategy loop details:")
+        for strategy in all_strategies:
+            if strategy.loop_points:
+                loop_summary = ", ".join([f"{start:.1f}-{end:.1f}s×{count}" for start, end, count in strategy.loop_points])
+                total_added = sum((end - start) * (count - 1) for start, end, count in strategy.loop_points)
+                print(f"  {strategy.name}: {len(strategy.loop_points)} loops (+{total_added:.1f}s added): [{loop_summary}]")
+            else:
+                print(f"  {strategy.name}: No loops")
+    else:
+        print("\nStrategy cut details:")
+        for strategy in all_strategies:
+            if strategy.cut_points:
+                cut_summary = ", ".join([f"{start:.1f}-{end:.1f}s" for start, end in strategy.cut_points])
+                total_cut = sum(end - start for start, end in strategy.cut_points)
+                print(f"  {strategy.name}: {len(strategy.cut_points)} cuts ({total_cut:.1f}s removed): [{cut_summary}]")
+            else:
+                print(f"  {strategy.name}: No cuts")
 
     # Stage 5: Render and score ALL strategies
     print("Scoring all strategies...")
@@ -337,7 +369,7 @@ def parse_arguments() -> argparse.Namespace:
         argparse.Namespace with parsed arguments
     """
     parser = argparse.ArgumentParser(
-        description='Music Smart Trim - Intelligently shorten audio files'
+        description='Music Smart Trim - Intelligently shorten or extend audio files'
     )
 
     parser.add_argument(
@@ -351,7 +383,7 @@ def parse_arguments() -> argparse.Namespace:
         '--target',
         required=True,
         type=float,
-        help='Target length in seconds'
+        help='Target length in seconds (trim if < original, extend if > original)'
     )
 
     parser.add_argument(

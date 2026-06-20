@@ -644,3 +644,320 @@ def generate_aggressive_strategy_with_buffer(
         "aggressive", clusters, original_length, target_length,
         buffer, sections, downbeats, regenerate_seed
     )
+
+
+def score_section_repeatability(
+    section: Dict,
+    audio: np.ndarray,
+    sr: int,
+    sections: List[Dict]
+) -> float:
+    """
+    Score how well a section can be repeated seamlessly.
+
+    Evaluates naturalness of looping based on:
+    - Section type priority (chorus > verse > bridge > intro/outro)
+    - Duration suitability (12-30s ideal for repetition)
+    - Energy consistency at boundaries
+    - Position in song (avoid intro/outro)
+
+    Args:
+        section: Section dict with start, end, label
+        audio: Audio data array
+        sr: Sample rate
+        sections: All sections for context
+
+    Returns:
+        Repeatability score (0.0-1.0, higher = better for looping)
+    """
+    import librosa
+
+    start = section['start']
+    end = section['end']
+    label = section.get('label', '').lower()
+    duration = end - start
+
+    score = 0.0
+
+    # 1. Section Type Priority (0.0-0.4)
+    if 'chorus' in label:
+        score += 0.4  # Choruses are ideal for repetition
+    elif 'hook' in label:
+        score += 0.35
+    elif 'verse' in label:
+        score += 0.25
+    elif 'bridge' in label:
+        score += 0.2
+    elif 'intro' in label or 'outro' in label:
+        score += 0.0  # Avoid repeating intro/outro
+    else:
+        score += 0.15  # Unknown sections get low score
+
+    # 2. Duration Suitability (0.0-0.25)
+    if 12.0 <= duration <= 30.0:
+        score += 0.25  # Ideal duration for looping
+    elif 8.0 <= duration < 12.0:
+        score += 0.15  # Acceptable but short
+    elif 30.0 < duration <= 45.0:
+        score += 0.15  # Acceptable but long
+    else:
+        score += 0.05  # Too short or too long
+
+    # 3. Position in Song (0.0-0.15)
+    # Avoid first/last 10% of song (intro/outro regions)
+    if sections:
+        total_length = sections[-1]['end']
+        relative_start = start / total_length
+        relative_end = end / total_length
+
+        if 0.15 < relative_start < 0.85 and 0.15 < relative_end < 0.85:
+            score += 0.15  # Middle section, good for looping
+        elif 0.10 < relative_start < 0.90:
+            score += 0.08  # Near middle
+        else:
+            score += 0.0  # Too close to edges
+
+    # 4. Energy Consistency at Boundaries (0.0-0.2)
+    try:
+        # Extract boundary regions (500ms at start and end)
+        boundary_duration = 0.5  # 500ms
+        start_sample = int(start * sr)
+        end_sample = int(end * sr)
+        boundary_samples = int(boundary_duration * sr)
+
+        if end_sample - start_sample > 2 * boundary_samples:
+            start_region = audio[start_sample:start_sample + boundary_samples]
+            end_region = audio[end_sample - boundary_samples:end_sample]
+
+            # Calculate RMS energy for both boundaries
+            start_energy = np.sqrt(np.mean(start_region ** 2))
+            end_energy = np.sqrt(np.mean(end_region ** 2))
+
+            # Similar energy at boundaries = better loop point
+            if start_energy > 0 and end_energy > 0:
+                energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
+                score += 0.2 * energy_ratio  # 0-0.2 based on similarity
+            else:
+                score += 0.05  # Silent boundaries
+    except Exception:
+        score += 0.1  # Neutral score if boundary analysis fails
+
+    return min(score, 1.0)  # Cap at 1.0
+
+
+def generate_extension_strategy(
+    clusters: List[Dict],
+    original_length: float,
+    target_length: float,
+    sections: Optional[List[Dict]] = None,
+    downbeats: Optional[np.ndarray] = None,
+    audio_data: Optional[np.ndarray] = None,
+    sample_rate: Optional[int] = None,
+    strategy_type: str = "balanced",
+    regenerate_seed: Optional[int] = None
+) -> TrimStrategy:
+    """
+    Generate extension strategy by repeating high-quality sections.
+
+    Strategy:
+    - Score all sections for repeatability
+    - Select best sections to repeat (prefer choruses)
+    - Distribute repetitions to reach target length
+    - Align to section boundaries and downbeats
+    - Apply crossfades for smooth transitions
+
+    Args:
+        clusters: List of cluster dicts (not heavily used for extension)
+        original_length: Original audio length in seconds
+        target_length: Target length in seconds (must be > original_length)
+        sections: List of section dicts with start, end, label
+        downbeats: Array of downbeat times
+        audio_data: Audio data for boundary analysis
+        sample_rate: Sample rate for boundary analysis
+        strategy_type: "conservative", "balanced", or "aggressive"
+        regenerate_seed: Optional seed for randomization
+
+    Returns:
+        TrimStrategy with populated loop_points for extension
+    """
+    if regenerate_seed is not None:
+        np.random.seed(regenerate_seed)
+
+    if downbeats is None:
+        downbeats = np.array([])
+    if sections is None:
+        sections = []
+
+    # Validate that we're extending, not trimming
+    if target_length <= original_length:
+        raise ValueError(f"Extension requires target_length > original_length ({target_length} <= {original_length})")
+
+    # Calculate how much extension is needed
+    extension_needed = target_length - original_length
+
+    # Strategy-specific parameters
+    STRATEGY_PARAMS = {
+        "conservative": {
+            "max_repeats_per_section": 2,  # Repeat each section at most 2 times
+            "fade_duration": ms_to_fade_duration(CROSSFADE_CONSERVATIVE_MS),
+        },
+        "balanced": {
+            "max_repeats_per_section": 3,  # Repeat each section at most 3 times
+            "fade_duration": ms_to_fade_duration(CROSSFADE_BALANCED_MS),
+        },
+        "aggressive": {
+            "max_repeats_per_section": 5,  # Repeat each section at most 5 times
+            "fade_duration": ms_to_fade_duration(CROSSFADE_AGGRESSIVE_MS),
+        },
+    }
+
+    params = STRATEGY_PARAMS.get(strategy_type, STRATEGY_PARAMS["balanced"])
+
+    # Score all sections for repeatability
+    section_scores = []
+    for section in sections:
+        score = score_section_repeatability(
+            section, audio_data, sample_rate, sections
+        ) if audio_data is not None and sample_rate is not None else 0.5
+
+        section_scores.append({
+            'section': section,
+            'score': score,
+            'duration': section['end'] - section['start']
+        })
+
+    # Sort by repeatability score (highest first)
+    section_scores.sort(key=lambda x: x['score'], reverse=True)
+
+    # Select sections to repeat and calculate repetition counts
+    loop_points = []
+    total_extension = 0.0
+    section_repeat_counts = {}  # Track how many times each section is repeated
+
+    while total_extension < extension_needed and section_scores:
+        # Get best remaining section
+        best = section_scores[0]
+        section = best['section']
+        section_id = f"{section['start']}-{section['end']}"
+
+        # Check if we've hit max repeats for this section
+        current_repeats = section_repeat_counts.get(section_id, 0)
+        if current_repeats >= params["max_repeats_per_section"]:
+            section_scores.pop(0)  # Remove from candidates
+            continue
+
+        # Add one repetition of this section
+        duration = best['duration']
+        remaining_extension = extension_needed - total_extension
+
+        # Don't add if it would overshoot by more than 30%
+        if duration > remaining_extension * 1.3:
+            # Try next best section
+            section_scores.pop(0)
+            continue
+
+        # Align to section boundaries
+        loop_start = section['start']
+        loop_end = section['end']
+
+        # Align to downbeats if available
+        if len(downbeats) > 0:
+            loop_start = find_nearest_downbeat(loop_start, downbeats)
+            loop_end = find_nearest_downbeat(loop_end, downbeats)
+
+        # Add loop point (we'll insert 1 additional copy, so repeat_count = 2)
+        loop_points.append((loop_start, loop_end, 2))
+        total_extension += (loop_end - loop_start)
+        section_repeat_counts[section_id] = current_repeats + 1
+
+    # Create fade regions at loop boundaries
+    fade_regions = []
+    fade_duration = params["fade_duration"]
+    for loop_start, loop_end, _ in loop_points:
+        # Add fade at the start of the loop insertion point
+        fade_regions.append((loop_start - fade_duration, loop_start + fade_duration))
+
+    return TrimStrategy(
+        name=f"extension_{strategy_type}",
+        cut_points=[],  # No cuts for extension
+        loop_points=loop_points,
+        fade_regions=fade_regions,
+        target_length=target_length
+    )
+
+
+
+
+def generate_extension_strategies(
+    clusters: List[Dict],
+    original_length: float,
+    target_length: float,
+    sections: Optional[List[Dict]] = None,
+    downbeats: Optional[np.ndarray] = None,
+    audio_data: Optional[np.ndarray] = None,
+    sample_rate: Optional[int] = None,
+    regenerate_seed: Optional[int] = None,
+    num_strategies: int = 10
+) -> List[TrimStrategy]:
+    """
+    Generate multiple diverse extension strategies.
+
+    Creates varied approaches to extending audio by repeating sections:
+    - Conservative: minimal repetitions (max 2x per section)
+    - Balanced: moderate repetitions (max 3x per section)
+    - Aggressive: more repetitions (max 5x per section)
+
+    Args:
+        clusters: List of cluster dicts (for consistency with trim API)
+        original_length: Original audio length in seconds
+        target_length: Target length in seconds (must be > original_length)
+        sections: List of section dicts with start, end, label
+        downbeats: Array of downbeat times
+        audio_data: Audio data for boundary analysis
+        sample_rate: Sample rate
+        regenerate_seed: Optional seed for randomization
+        num_strategies: Number of strategies to generate (default: 10)
+
+    Returns:
+        List of TrimStrategy objects with populated loop_points
+    """
+    strategies = []
+    base_seed = regenerate_seed if regenerate_seed is not None else 0
+
+    # Generate 10 diverse strategies with different parameters
+    strategy_configs = [
+        # Conservative variants (max 2 repeats per section)
+        ("conservative", 0),
+        ("conservative", 1),
+        ("conservative", 2),
+        ("conservative", 3),
+        # Balanced variants (max 3 repeats per section)
+        ("balanced", 4),
+        ("balanced", 5),
+        ("balanced", 6),
+        # Aggressive variants (max 5 repeats per section)
+        ("aggressive", 7),
+        ("aggressive", 8),
+        ("aggressive", 9),
+    ]
+
+    for i, (strategy_type, seed_offset) in enumerate(strategy_configs[:num_strategies]):
+        strategy_seed = base_seed + seed_offset
+
+        try:
+            strategy = generate_extension_strategy(
+                clusters, original_length, target_length,
+                sections=sections,
+                downbeats=downbeats,
+                audio_data=audio_data,
+                sample_rate=sample_rate,
+                strategy_type=strategy_type,
+                regenerate_seed=strategy_seed
+            )
+            strategy.name = f"extension_{strategy_type}_{i+1}"
+            strategies.append(strategy)
+        except Exception as e:
+            print(f"⚠️  Failed to generate {strategy_type} extension strategy {i+1}: {e}")
+            continue
+
+    return strategies
