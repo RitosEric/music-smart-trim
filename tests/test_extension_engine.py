@@ -162,6 +162,18 @@ class TestGenerateExtensionStrategy:
         with pytest.raises(ValueError, match="Unknown strategy_type"):
             generate_extension_strategy("invalid", clusters, 100.0, 140.0)
 
+    def test_validation_target_must_exceed_original(self):
+        """Test that extension validates target > original."""
+        clusters = [{'segment_times': [(20.0, 40.0)], 'avg_similarity': 0.90, 'duration': 20.0}]
+
+        # target == original
+        with pytest.raises(ValueError, match="Extension requires target > original"):
+            generate_extension_strategy("best", clusters, 100.0, 100.0)
+
+        # target < original
+        with pytest.raises(ValueError, match="Extension requires target > original"):
+            generate_extension_strategy("best", clusters, 100.0, 80.0)
+
 
 class TestGenerateExtensionStrategies:
     """Tests for batch strategy generation."""

@@ -151,6 +151,12 @@ def generate_extension_strategy(
     Returns:
         TrimStrategy with loop_points populated, cut_points empty
     """
+    # Validate: extension requires target > original
+    if target_length <= original_length:
+        raise ValueError(
+            f"Extension requires target > original (got target={target_length:.1f}s, original={original_length:.1f}s)"
+        )
+
     STRATEGY_CONFIGS = {
         "best": {
             "similarity_filter": 0.85,
@@ -224,12 +230,9 @@ def generate_extension_strategy(
 
         aligned_loops.append((aligned_start, aligned_end, repeat_count))
 
-    # Create fade regions for loop boundaries
-    fade_duration = 0.25
+    # Note: Fade regions will be calculated during rendering (Task 3: apply_loops)
+    # Crossfades are applied at actual loop boundaries when audio is rendered
     fade_regions = []
-    for loop_start, loop_end, repeat_count in aligned_loops:
-        for i in range(repeat_count - 1):
-            fade_regions.append((loop_end - fade_duration, loop_end + fade_duration))
 
     return TrimStrategy(
         name=strategy_type,
@@ -324,6 +327,6 @@ def refine_extension_for_length(
                 if count > 2:
                     strategy.loop_points[max_repeat_idx] = (start, end, count - 1)
                 else:
-                    strategy.loop_points.pop(max_repeat_idx)
-                    if max_repeat_idx < len(strategy.fade_regions):
-                        strategy.fade_regions.pop(max_repeat_idx)
+                    # Don't pop if it would create empty strategy
+                    if len(strategy.loop_points) > 1:
+                        strategy.loop_points.pop(max_repeat_idx)
