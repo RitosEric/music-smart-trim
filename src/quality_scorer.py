@@ -538,13 +538,13 @@ def score_strategy(
     device: str = "cpu"
 ) -> Dict:
     """
-    Score a complete trim strategy with enhanced heuristics and optional MERT embeddings.
+    Score a complete trim/extension strategy with enhanced heuristics and optional MERT embeddings.
 
     Calculates resulting length, scores all components, and converts total to star rating.
 
     Scoring weights (V5 - Enhanced):
-    - Musical coherence: 50 points (50%) - includes cut pattern bonus, optional MERT
-    - Transition smoothness: 30 points (30%) - enhanced with spectral flux, loudness
+    - Musical coherence: 50 points (50%) - includes cut pattern bonus / loop quality, optional MERT
+    - Transition smoothness: 30 points (30%) - enhanced with spectral flux, loudness / loop boundaries
     - Length accuracy: 20 points (20%) - STRICT ±15s enforcement
     Total: 100 points → converted to 0.5-5.0 star rating (0.1 increments)
 
@@ -742,10 +742,9 @@ def score_loop_naturalness(
     Score how natural the loop repetitions are (extension quality).
 
     Evaluates:
-    - Loop diversity (not repeating same section too much)
-    - Section quality (prefer choruses, avoid intro/outro)
-    - Loop length appropriateness
-    - Over-repetition penalty
+    - Loop diversity (20 pts): Not repeating same section too much
+    - Section quality (15 pts): Prefer choruses, avoid intro/outro
+    - Over-repetition penalty (15 pts): Limit total repetitions
 
     Args:
         audio: Audio data
@@ -765,27 +764,26 @@ def score_loop_naturalness(
     # 1. Loop Diversity (0-20 points)
     # Penalize repeating the same section multiple times
     unique_sections = set((start, end) for start, end, _ in loop_points)
-    diversity_ratio = len(unique_sections) / total_loops
+    diversity_ratio = len(unique_sections) / max(1, total_loops)
     score += 20.0 * diversity_ratio
 
     # 2. Section Quality (0-15 points)
     # Score based on what sections are being repeated
-    points_per_loop = 5.0 / total_loops  # Pre-calculate to avoid repeated division
     for start, end, repeat_count in loop_points:
         duration = end - start
         relative_start = start / original_length
 
         # Prefer middle sections (avoid intro/outro)
         if 0.15 < relative_start < 0.85:
-            score += points_per_loop
+            score += 5.0 / max(1, total_loops)
 
         # Prefer reasonable durations (12-30s)
         if 12.0 <= duration <= 30.0:
-            score += points_per_loop
+            score += 5.0 / max(1, total_loops)
 
         # Prefer shorter repetitions (2-3x) over excessive (5x+)
         if repeat_count <= 3:
-            score += points_per_loop
+            score += 5.0 / max(1, total_loops)
 
     # 3. Over-repetition Penalty (0-15 points)
     # Penalize if too many total repetitions
@@ -809,9 +807,9 @@ def score_loop_transitions(
     Score transition smoothness at loop boundaries (extension quality).
 
     Evaluates:
-    - Energy consistency at loop start/end
-    - Spectral similarity at boundaries
-    - Zero-crossing alignment
+    - Energy consistency (10 pts): RMS energy at loop start/end boundaries
+    - Zero-crossing consistency (10 pts): Smooth zero-crossing alignment
+    - Spectral similarity (10 pts): Audio similarity at boundaries
 
     Args:
         audio: Audio data
@@ -826,7 +824,6 @@ def score_loop_transitions(
 
     score = 0.0
     total_transitions = len(loop_points)
-    points_per_transition = 10.0 / total_transitions  # Pre-calculate to avoid repeated division
 
     for start, end, _ in loop_points:
         # Analyze boundary regions (500ms)
@@ -836,7 +833,7 @@ def score_loop_transitions(
         boundary_samples = int(boundary_duration * sr)
 
         if end_sample - start_sample <= 2 * boundary_samples:
-            score += points_per_transition
+            score += 10.0 / max(1, total_transitions)
             continue
 
         try:
@@ -849,7 +846,7 @@ def score_loop_transitions(
 
             if start_energy > 0 and end_energy > 0:
                 energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
-                score += points_per_transition * energy_ratio
+                score += (10.0 * energy_ratio) / max(1, total_transitions)
 
             # 2. Zero-crossing consistency (0-10 points per transition)
             start_zc = np.sum(librosa.zero_crossings(start_region))
@@ -857,7 +854,7 @@ def score_loop_transitions(
 
             if start_zc > 0 and end_zc > 0:
                 zc_ratio = min(start_zc, end_zc) / max(start_zc, end_zc)
-                score += points_per_transition * zc_ratio
+                score += (10.0 * zc_ratio) / max(1, total_transitions)
 
             # 3. Spectral similarity (0-10 points per transition)
             start_spec = np.abs(librosa.stft(start_region, n_fft=2048))
@@ -868,10 +865,10 @@ def score_loop_transitions(
 
             spec_corr = np.corrcoef(start_mean, end_mean)[0, 1]
             if not np.isnan(spec_corr):
-                score += points_per_transition * max(0, spec_corr)
+                score += (10.0 * max(0, spec_corr)) / max(1, total_transitions)
 
         except Exception:
-            score += points_per_transition  # Neutral if analysis fails
+            score += 10.0 / max(1, total_transitions)  # Neutral if analysis fails
 
     return min(30.0, score)
 
@@ -941,7 +938,7 @@ def score_mert_loop_transitions(
         if num_transitions > 0:
             avg_similarity = total_similarity / num_transitions
             return 5.0 * avg_similarity  # 0-5 bonus points
-        
+
     except Exception as e:
         print(f"⚠️  MERT loop scoring failed: {e}")
 

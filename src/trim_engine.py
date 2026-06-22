@@ -647,7 +647,8 @@ def generate_strategies(
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None,
-    num_strategies: int = 5
+    num_strategies: int = 5,
+    min_segment_duration: float = 10.0
 ) -> List[TrimStrategy]:
     """
     Unified interface for generating trim or extension strategies.
@@ -663,6 +664,7 @@ def generate_strategies(
         downbeats: Optional array of downbeat times
         regenerate_seed: Optional seed for reproducible randomization
         num_strategies: Number of strategies to generate (default: 5)
+        min_segment_duration: Minimum segment duration in seconds (default: 10.0, only used for extension mode)
 
     Returns:
         List of TrimStrategy objects
@@ -689,7 +691,8 @@ def generate_strategies(
             sections=sections,
             downbeats=downbeats,
             regenerate_seed=regenerate_seed,
-            num_strategies=num_strategies
+            num_strategies=num_strategies,
+            min_segment_duration=min_segment_duration
         )
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'trim' or 'extend'.")

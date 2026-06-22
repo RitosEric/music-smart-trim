@@ -104,6 +104,20 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
         fade_in_duration = min(crossfade_samples, len(final_segment) // 2)
         final_segment = apply_smooth_fade_in(final_segment, fade_in_duration)
 
+        # Apply fade-out only if audio isn't already fading naturally
+        # Check if last 2s is already quiet (natural fade present)
+        if len(final_segment) >= 2 * sr:
+            last_2s = final_segment[-int(2 * sr):]
+            last_2s_rms = np.sqrt(np.mean(last_2s**2))
+            # If RMS < 0.01 (already very quiet), skip fade to avoid double-fade
+            if last_2s_rms >= 0.01:
+                fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
+                final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
+        else:
+            # Short segment - always apply fade
+            fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
+            final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
+
         segments.append(final_segment)
 
     # Concatenate segments with crossfades between them
@@ -121,7 +135,10 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
 
 def apply_loops(audio: np.ndarray, sr: int, loop_points: List[Tuple[float, float, int]]) -> np.ndarray:
     """
-    Apply loops to audio by repeating specified segments.
+    Apply loops to audio by repeating specified segments with constant-power crossfades at boundaries.
+
+    Repeats loop segments with 500ms constant-power crossfades between each repetition
+    for seamless, natural-sounding loops.
 
     Args:
         audio: Audio signal as numpy array
@@ -129,17 +146,20 @@ def apply_loops(audio: np.ndarray, sr: int, loop_points: List[Tuple[float, float
         loop_points: List of (start_time, end_time, repeat_count) tuples for sections to repeat
 
     Returns:
-        Audio with loop regions repeated
+        Audio with loop regions repeated and crossfaded at boundaries
     """
     if not loop_points:
         return audio.copy()
 
+    from src.crossfade import constant_power_crossfade
+
     # Sort loop points by start time
     sorted_loops = sorted(loop_points, key=lambda l: l[0])
 
-    # Build segments with loops applied
+    # Build segments with loops applied and crossfaded
     segments = []
     last_end = 0
+    crossfade_samples = ms_to_samples(DEFAULT_CROSSFADE_MS, sr)  # 500ms crossfade
 
     for loop_start, loop_end, repeat_count in sorted_loops:
         loop_start_sample = int(loop_start * sr)
@@ -149,17 +169,41 @@ def apply_loops(audio: np.ndarray, sr: int, loop_points: List[Tuple[float, float
         if loop_start_sample > last_end:
             segments.append(audio[last_end:loop_start_sample])
 
-        # Add the loop segment repeated repeat_count times
+        # Add the loop segment repeated repeat_count times with crossfades
         loop_segment = audio[loop_start_sample:loop_end_sample]
-        for _ in range(repeat_count):
-            segments.append(loop_segment)
+
+        # Build the repeated loop with crossfades between each repetition
+        if repeat_count > 0:
+            looped_audio = loop_segment.copy()
+            for _ in range(repeat_count - 1):
+                # Apply constant-power crossfade between repetitions
+                looped_audio = constant_power_crossfade(looped_audio, loop_segment, crossfade_samples)
+            segments.append(looped_audio)
 
         # Move past the loop
         last_end = loop_end_sample
 
     # Add final segment after last loop
     if last_end < len(audio):
-        segments.append(audio[last_end:])
+        final_segment = audio[last_end:]
+
+        # Apply fade-out only if audio isn't already fading naturally
+        # Check if last 2s is already quiet (natural fade present)
+        if len(final_segment) >= 2 * sr:
+            last_2s = final_segment[-int(2 * sr):]
+            last_2s_rms = np.sqrt(np.mean(last_2s**2))
+            # If RMS < 0.01 (already very quiet), skip fade to avoid double-fade
+            if last_2s_rms >= 0.01:
+                from src.crossfade import apply_smooth_fade_out
+                fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
+                final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
+        else:
+            # Short segment - always apply fade
+            from src.crossfade import apply_smooth_fade_out
+            fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
+            final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
+
+        segments.append(final_segment)
 
     # Concatenate all segments
     if segments:

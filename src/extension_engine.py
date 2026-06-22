@@ -17,7 +17,8 @@ def select_extension_sections(
     section_priority_weights: Optional[Dict[str, float]] = None,
     randomize_order: bool = False,
     random_seed: Optional[int] = None,
-    max_repeats: Optional[int] = None
+    max_repeats: Optional[int] = None,
+    min_segment_duration: float = 10.0
 ) -> List[Tuple[float, float, int]]:
     """
     Select sections to repeat for audio extension.
@@ -59,7 +60,7 @@ def select_extension_sections(
         for seg_start, seg_end in segment_times:
             duration = seg_end - seg_start
 
-            if duration < 10.0:  # Skip short segments
+            if duration < min_segment_duration:  # Skip short segments
                 continue
 
             # Find section label
@@ -136,7 +137,8 @@ def generate_extension_strategy(
     target_length: float,
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: Optional[int] = None
+    regenerate_seed: Optional[int] = None,
+    min_segment_duration: float = 10.0
 ) -> TrimStrategy:
     """
     Generate single extension strategy with specific parameters.
@@ -214,7 +216,8 @@ def generate_extension_strategy(
         section_priority_weights=config["section_weights"],
         randomize_order=config["randomize"],
         random_seed=regenerate_seed,
-        max_repeats=config["max_repeats"]
+        max_repeats=config["max_repeats"],
+        min_segment_duration=min_segment_duration
     )
 
     # Align loop points to section boundaries
@@ -250,7 +253,8 @@ def generate_extension_strategies(
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None,
-    num_strategies: int = 5
+    num_strategies: int = 5,
+    min_segment_duration: float = 10.0
 ) -> List[TrimStrategy]:
     """
     Generate multiple diverse extension strategies.
@@ -267,7 +271,8 @@ def generate_extension_strategies(
 
         strategy = generate_extension_strategy(
             strategy_type, clusters, original_length, target_length,
-            sections=sections, downbeats=downbeats, regenerate_seed=strategy_seed
+            sections=sections, downbeats=downbeats, regenerate_seed=strategy_seed,
+            min_segment_duration=min_segment_duration
         )
         strategies.append(strategy)
 

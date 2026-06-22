@@ -9,8 +9,7 @@ from typing import List, Dict, Optional, Tuple
 from src.audio_loader import load_audio, AudioLoadError
 from src.spectral_analyzer import analyze_audio_structure
 from src.segment_matcher import match_segments
-from src.trim_engine import generate_trim_strategies
-from src.extension_strategies import generate_diverse_extension_strategies
+from src.trim_engine import generate_trim_strategies, generate_strategies
 from src.quality_scorer import score_strategy
 from src.output_generator import generate_outputs
 
@@ -84,7 +83,9 @@ def retry_for_quality(
     audio_data,
     sample_rate: int,
     use_mert: bool,
-    regenerate_seed: Optional[int]
+    regenerate_seed: Optional[int],
+    mode: str,
+    min_segment_duration: float = 10.0
 ) -> Tuple[List, List]:
     """
     Retry strategy generation if quality is below threshold.
@@ -99,6 +100,7 @@ def retry_for_quality(
         sample_rate: Sample rate
         use_mert: Whether to use MERT embeddings
         regenerate_seed: Current regeneration seed (None for first run)
+        mode: Processing mode ("trim" or "extend")
 
     Returns:
         Tuple of (strategies, scores) - best strategy and its score
@@ -119,14 +121,16 @@ def retry_for_quality(
         for retry_seed in range(1, MAX_QUALITY_RETRIES + 1):
             print(f"\nRetry {retry_seed}/{MAX_QUALITY_RETRIES} with seed {retry_seed}...")
 
-            all_strategies = generate_trim_strategies(
-                clusters,
-                original_length,
-                target_length,
+            all_strategies = generate_strategies(
+                mode=mode,
+                clusters=clusters,
+                original_length=original_length,
+                target_length=target_length,
                 sections=structure['sections'],
                 downbeats=structure['beat_info']['downbeats'],
                 regenerate_seed=retry_seed,
-                num_strategies=10
+                num_strategies=10,
+                min_segment_duration=min_segment_duration
             )
 
             scored_strategies = []
@@ -160,21 +164,30 @@ def run_pipeline(
     regenerate_seed: Optional[int] = None,
     use_mert: bool = False,
     excluded_strategies: Optional[List[str]] = None,
-    auto_protect: bool = True
+    auto_protect: bool = True,
+    min_segment_duration: float = 10.0
 ) -> Dict:
     """
     Run complete pipeline from audio loading to output generation.
+
+    Automatically detects mode (trim vs extend) based on target vs original length.
 
     Orchestrates the entire workflow:
     1. Load audio
     2. Analyze audio structure (spectral analysis + beat detection)
     3. Match segments and handle protected regions
-    4. Generate 10 diverse trim strategies (section-aware, back-to-back cuts)
-    5. Score all strategies and select top 3 by quality
-    6. Generate outputs for top 3 only
+    4. Auto-detect mode: trim (target < original) or extend (target > original)
+    5. Generate 5 diverse strategies (trim or extend based on mode)
+    6. Score all strategies and select top 3 by quality
+    7. Generate outputs for top 3 only
+
+    NEW IN V8 (BUG FIX):
+    - Generates 5 TRULY diverse strategies (fixed bug where all 10 were identical)
+    - Each strategy uses different parameters: best, diverse, varied, balanced, conservative
+    - Shows top 3 by quality score
 
     NEW IN V6:
-    - Generates 10 diverse strategies, shows only top 3 by quality
+    - Generates multiple strategies, shows only top 3 by quality
     - Excludes previously shown strategies on regeneration
     - Ensures variety in output options
 
@@ -194,7 +207,7 @@ def run_pipeline(
             - scores: List of top 3 score dicts
             - output_files: List of output file paths
             - processing_time: Processing time in seconds
-            - all_strategies: List of all 10 strategy names (for exclusion tracking)
+            - all_strategies: List of all strategy names (for exclusion tracking)
 
     Raises:
         AudioLoadError: If audio file cannot be loaded
@@ -238,94 +251,50 @@ def run_pipeline(
     print(f"Identified {len(clusters)} segment clusters")
     print(f"Protected regions: {len(protected_regions_parsed)}")
 
-    # Stage 4: Detect extend vs trim mode and generate strategies
-    is_extending = target_length > original_length
+    # Stage 4: Detect mode and generate strategies
+    mode = "trim" if target_length < original_length else "extend"
+    print(f"\nMode: {mode.upper()} ({original_length:.1f}s → {target_length:.1f}s)")
 
-    if is_extending:
-        # Extension mode: repeat sections to reach target length
-        extension_needed = target_length - original_length
-        print(f"\n🔄 EXTENSION MODE: Extending audio by {extension_needed:.1f}s ({original_length:.1f}s → {target_length:.1f}s)")
-        print("Generating and evaluating 5 diverse extension strategies...")
+    print(f"Generating 5 diverse {mode} strategies...")
+    all_strategies = generate_strategies(
+        mode=mode,
+        clusters=clusters,
+        original_length=original_length,
+        target_length=target_length,
+        sections=structure['sections'],
+        downbeats=structure['beat_info']['downbeats'],
+        regenerate_seed=regenerate_seed,
+        num_strategies=5,
+        min_segment_duration=min_segment_duration
+    )
+    print(f"Generated {len(all_strategies)} strategies")
 
-        # Generate 5 diverse strategies
-        candidate_strategies = generate_diverse_extension_strategies(
-            original_length=original_length,
-            target_length=target_length,
-            sections=structure['sections'],
-            downbeats=structure['beat_info']['downbeats'],
-            audio_data=audio_data,
-            sample_rate=sample_rate,
-            num_strategies=5
-        )
+    # DEBUG: Show strategy details
+    print(f"\nStrategy details:")
+    for strategy in all_strategies:
+        if mode == "trim" and strategy.cut_points:
+            cut_summary = ", ".join([f"{start:.1f}-{end:.1f}s" for start, end in strategy.cut_points])
+            total_cut = sum(end - start for start, end in strategy.cut_points)
+            print(f"  {strategy.name}: {len(strategy.cut_points)} cuts ({total_cut:.1f}s removed): [{cut_summary}]")
+        elif mode == "extend" and strategy.loop_points:
+            loop_summary = ", ".join([f"{start:.1f}-{end:.1f}s×{count}" for start, end, count in strategy.loop_points])
+            total_added = sum((end - start) * (count - 1) for start, end, count in strategy.loop_points)
+            print(f"  {strategy.name}: {len(strategy.loop_points)} loops ({total_added:.1f}s added): [{loop_summary}]")
+        else:
+            print(f"  {strategy.name}: No modifications")
 
-        # Score all candidates
-        from src.output_generator import render_strategy
-        scored_candidates = []
-        for strategy in candidate_strategies:
-            rendered_audio = render_strategy(strategy, audio_data, sample_rate)
-            score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
-            scored_candidates.append({
-                'strategy': strategy,
-                'score': score,
-                'rendered_audio': rendered_audio
-            })
-            print(f"  {strategy.name}: {score['star_rating']:.1f}★ ({score['total_points']:.1f} points)")
+    # Stage 5: Render and score ALL strategies
+    print("Scoring all strategies...")
+    if use_mert:
+        print("  Using MERT embeddings for enhanced quality scoring...")
+    from src.output_generator import render_strategy
 
-        # Select best strategy
-        scored_candidates.sort(key=lambda x: x['score']['total_points'], reverse=True)
-        best = scored_candidates[0]
-
-        print(f"\n✨ Best extension strategy selected: {best['strategy'].name} - {best['score']['star_rating']:.1f}★")
-
-        # Show loop details for best strategy
-        print("\nLoop details:")
-        if best['strategy'].loop_points:
-            loop_summary = ", ".join([f"{start:.1f}-{end:.1f}s×{count}" for start, end, count in best['strategy'].loop_points])
-            total_added = sum((end - start) * (count - 1) for start, end, count in best['strategy'].loop_points)
-            print(f"  {len(best['strategy'].loop_points)} loops (+{total_added:.1f}s added): [{loop_summary}]")
-
-        # Use best strategy as the single result (no regeneration for extension mode)
-        all_strategies = [best['strategy']]
-        scored_strategies = [best]
-
-    else:
-        # Trim mode: remove repeated sections to reach target length
-        trim_needed = original_length - target_length
-        print(f"\n✂️  TRIM MODE: Shortening audio by {trim_needed:.1f}s ({original_length:.1f}s → {target_length:.1f}s)")
-        print("Generating 10 diverse trim strategies...")
-        all_strategies = generate_trim_strategies(
-            clusters,
-            original_length,
-            target_length,
-            sections=structure['sections'],
-            downbeats=structure['beat_info']['downbeats'],
-            regenerate_seed=regenerate_seed,
-            num_strategies=10
-        )
-        print(f"Generated {len(all_strategies)} strategies")
-
-        # DEBUG: Show cut details
-        print("\nStrategy cut details:")
-        for strategy in all_strategies:
-            if strategy.cut_points:
-                cut_summary = ", ".join([f"{start:.1f}-{end:.1f}s" for start, end in strategy.cut_points])
-                total_cut = sum(end - start for start, end in strategy.cut_points)
-                print(f"  {strategy.name}: {len(strategy.cut_points)} cuts ({total_cut:.1f}s removed): [{cut_summary}]")
-            else:
-                print(f"  {strategy.name}: No cuts")
-
-        # Stage 5: Render and score ALL trim strategies
-        print("Scoring all strategies...")
-        if use_mert:
-            print("  Using MERT embeddings for enhanced quality scoring...")
-        from src.output_generator import render_strategy
-
-        scored_strategies = []
-        for strategy in all_strategies:
-            # Render the strategy to get actual output
-            rendered_audio = render_strategy(strategy, audio_data, sample_rate)
-            # Score based on rendered output (with optional MERT)
-            score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
+    scored_strategies = []
+    for strategy in all_strategies:
+        # Render the strategy to get actual output
+        rendered_audio = render_strategy(strategy, audio_data, sample_rate)
+        # Score based on rendered output (with optional MERT)
+        score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
         scored_strategies.append({
             'strategy': strategy,
             'score': score,
@@ -342,7 +311,8 @@ def run_pipeline(
     # Select BEST strategy (with quality retry if needed)
     strategies, scores = retry_for_quality(
         scored_strategies, clusters, original_length, target_length,
-        structure, audio_data, sample_rate, use_mert, regenerate_seed
+        structure, audio_data, sample_rate, use_mert, regenerate_seed, mode,
+        min_segment_duration
     )
 
     print(f"\n✨ Best strategy selected:")
@@ -379,7 +349,7 @@ def run_pipeline(
         'output_files': output_files,
         'processing_time': processing_time,
         'original_length': original_length,
-        'all_strategy_names': [s['strategy'].name for s in scored_strategies[:10]]  # Track all 10 for exclusion
+        'all_strategy_names': [s['strategy'].name for s in scored_strategies[:5]]  # Track all 5 for exclusion
     }
 
 
@@ -391,7 +361,7 @@ def parse_arguments() -> argparse.Namespace:
         argparse.Namespace with parsed arguments
     """
     parser = argparse.ArgumentParser(
-        description='Music Smart Trim - Intelligently shorten or extend audio files'
+        description='Music Smart Trim - Intelligently shorten audio files'
     )
 
     parser.add_argument(
@@ -405,7 +375,7 @@ def parse_arguments() -> argparse.Namespace:
         '--target',
         required=True,
         type=float,
-        help='Target length in seconds (trim if < original, extend if > original)'
+        help='Target length in seconds'
     )
 
     parser.add_argument(
@@ -432,6 +402,13 @@ def parse_arguments() -> argparse.Namespace:
         '--no-auto-protect',
         action='store_true',
         help='Disable automatic intro/outro protection (allows cutting from start/end)'
+    )
+
+    parser.add_argument(
+        '--min-segment-duration',
+        type=float,
+        default=10.0,
+        help='Minimum segment duration for extension mode in seconds (default: 10.0)'
     )
 
     return parser.parse_args()
@@ -507,7 +484,8 @@ def main():
             regenerate_seed=None,
             use_mert=args.use_mert,
             excluded_strategies=None,
-            auto_protect=not args.no_auto_protect
+            auto_protect=not args.no_auto_protect,
+            min_segment_duration=args.min_segment_duration
         )
 
         # Display results
@@ -538,7 +516,8 @@ def main():
                     regenerate_seed=regenerate_count,
                     use_mert=args.use_mert,
                     excluded_strategies=excluded_strategies,
-                    auto_protect=not args.no_auto_protect
+                    auto_protect=not args.no_auto_protect,
+                    min_segment_duration=args.min_segment_duration
                 )
 
                 display_results(result)

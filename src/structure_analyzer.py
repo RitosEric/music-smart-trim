@@ -198,12 +198,9 @@ def label_sections(
             label = "intro"
         elif start_time >= outro_start:
             label = "outro"
-        elif (repetition_count >= 3 and is_high_energy and is_bright and
+        elif (repetition_count >= 2 and is_high_energy and is_bright and
               12.0 <= section_duration <= 30.0):
-            label = "chorus"  # High repetition + high energy + short = chorus
-        elif (repetition_count >= 2 and is_high_energy and
-              12.0 <= section_duration <= 35.0):
-            label = "chorus"  # Medium-high repetition + high energy + shortish = likely chorus
+            label = "chorus"  # Repeated + high energy + bright + short = chorus
         elif (repetition_count >= 1 and 25.0 <= section_duration <= 60.0):
             label = "verse"  # Some repetition + longer duration = verse
         elif repetition_count == 0 and section_duration < 25.0:

@@ -7,7 +7,9 @@ from src.quality_scorer import (
     score_transition_smoothness,
     score_musical_coherence,
     score_length_accuracy,
-    score_strategy
+    score_strategy,
+    score_loop_naturalness,
+    score_loop_transitions
 )
 from src.trim_engine import TrimStrategy
 
@@ -113,9 +115,9 @@ class TestMusicalCoherence:
 class TestCompleteStrategy:
     """Test complete strategy scoring."""
 
-    def test_strategy_scoring(self):
-        """Test scoring a complete strategy."""
-        # Create a simple strategy
+    def test_trim_strategy_scoring(self):
+        """Test scoring a trim strategy."""
+        # Create a simple trim strategy
         strategy = TrimStrategy(
             name="test",
             cut_points=[(30.0, 60.0)],
@@ -143,3 +145,188 @@ class TestCompleteStrategy:
         assert 0.0 <= score['breakdown']['musical_coherence'] <= 50.0
         assert 0.0 <= score['breakdown']['transition_smoothness'] <= 30.0
         assert 0.0 <= score['breakdown']['length_accuracy'] <= 20.0
+
+    def test_extension_strategy_scoring(self):
+        """Test scoring an extension strategy."""
+        # Create an extension strategy
+        strategy = TrimStrategy(
+            name="test_extension",
+            cut_points=[],
+            loop_points=[(40.0, 60.0, 2), (100.0, 120.0, 3)],
+            fade_regions=[(40.0, 40.5), (100.0, 100.5)],
+            target_length=240.0
+        )
+
+        # Create test audio (3 minutes)
+        audio = np.random.randn(22050 * 180)
+        sr = 22050
+
+        # Score the strategy
+        score = score_strategy(strategy, audio, sr, 180.0)
+
+        # Verify structure
+        assert 'total_points' in score
+        assert 'star_rating' in score
+        assert 'breakdown' in score
+        assert 'resulting_length' in score
+
+        # Verify ranges
+        assert 0.0 <= score['total_points'] <= 100.0
+        assert 0.0 <= score['star_rating'] <= 5.0
+        assert 0.0 <= score['breakdown']['musical_coherence'] <= 50.0
+        assert 0.0 <= score['breakdown']['transition_smoothness'] <= 30.0
+        assert 0.0 <= score['breakdown']['length_accuracy'] <= 20.0
+
+    def test_extension_strategies_differ_in_score(self):
+        """Test that different extension strategies produce different scores."""
+        # Create test audio (3 minutes)
+        audio = np.random.randn(22050 * 180)
+        sr = 22050
+
+        # Strategy 1: Good diversity, chorus-focused
+        strategy1 = TrimStrategy(
+            name="diverse",
+            cut_points=[],
+            loop_points=[(40.0, 60.0, 2), (100.0, 120.0, 2)],
+            fade_regions=[(40.0, 40.5), (100.0, 100.5)],
+            target_length=240.0
+        )
+
+        # Strategy 2: Poor diversity, same section repeated many times
+        strategy2 = TrimStrategy(
+            name="repetitive",
+            cut_points=[],
+            loop_points=[(40.0, 60.0, 5)],
+            fade_regions=[(40.0, 40.5)],
+            target_length=240.0
+        )
+
+        score1 = score_strategy(strategy1, audio, sr, 180.0)
+        score2 = score_strategy(strategy2, audio, sr, 180.0)
+
+        # Scores should be different (strategy1 should score higher)
+        assert score1['total_points'] != score2['total_points']
+        # Strategy with better diversity should score higher
+        assert score1['breakdown']['musical_coherence'] > score2['breakdown']['musical_coherence']
+
+    def test_extension_vs_trim_scoring_comparable(self):
+        """Test that extension and trim strategies use comparable scoring scales."""
+        audio = np.random.randn(22050 * 180)
+        sr = 22050
+
+        # Good trim strategy
+        trim_strategy = TrimStrategy(
+            name="trim",
+            cut_points=[(30.0, 60.0)],
+            loop_points=[],
+            fade_regions=[(30.0, 30.5)],
+            target_length=150.0
+        )
+
+        # Good extension strategy
+        extension_strategy = TrimStrategy(
+            name="extend",
+            cut_points=[],
+            loop_points=[(40.0, 60.0, 2), (100.0, 120.0, 2)],
+            fade_regions=[(40.0, 40.5), (100.0, 100.5)],
+            target_length=220.0
+        )
+
+        trim_score = score_strategy(trim_strategy, audio, sr, 180.0)
+        extension_score = score_strategy(extension_strategy, audio, sr, 180.0)
+
+        # Both should produce valid scores in similar ranges
+        assert 0.0 <= trim_score['star_rating'] <= 5.0
+        assert 0.0 <= extension_score['star_rating'] <= 5.0
+        # Both should use same 100-point scale
+        assert 0.0 <= trim_score['total_points'] <= 100.0
+        assert 0.0 <= extension_score['total_points'] <= 100.0
+
+
+class TestLoopScoring:
+    """Test loop-specific scoring functions for extension strategies."""
+
+    def test_loop_naturalness_empty(self):
+        """Test loop naturalness with no loops."""
+        audio = np.random.randn(22050 * 180)
+        score = score_loop_naturalness(audio, 22050, [], 180.0)
+        assert score == 25.0  # Neutral score
+
+    def test_loop_naturalness_diverse(self):
+        """Test loop naturalness rewards diversity."""
+        audio = np.random.randn(22050 * 180)
+
+        # Diverse: 2 different sections
+        diverse_loops = [(40.0, 60.0, 2), (100.0, 120.0, 2)]
+        diverse_score = score_loop_naturalness(audio, 22050, diverse_loops, 180.0)
+
+        # Repetitive: same section repeated
+        repetitive_loops = [(40.0, 60.0, 4)]
+        repetitive_score = score_loop_naturalness(audio, 22050, repetitive_loops, 180.0)
+
+        # Diverse should score higher
+        assert diverse_score > repetitive_score
+
+    def test_loop_naturalness_over_repetition(self):
+        """Test loop naturalness penalizes over-repetition."""
+        audio = np.random.randn(22050 * 180)
+
+        # Reasonable: 6 total repetitions
+        reasonable_loops = [(40.0, 60.0, 2), (100.0, 120.0, 2), (140.0, 160.0, 2)]
+        reasonable_score = score_loop_naturalness(audio, 22050, reasonable_loops, 180.0)
+
+        # Excessive: 15 total repetitions
+        excessive_loops = [(40.0, 60.0, 5), (100.0, 120.0, 5), (140.0, 160.0, 5)]
+        excessive_score = score_loop_naturalness(audio, 22050, excessive_loops, 180.0)
+
+        # Reasonable should score higher
+        assert reasonable_score > excessive_score
+
+    def test_loop_naturalness_section_position(self):
+        """Test loop naturalness prefers middle sections over intro/outro."""
+        audio = np.random.randn(22050 * 180)
+
+        # Middle section (preferred)
+        middle_loops = [(80.0, 100.0, 2)]
+        middle_score = score_loop_naturalness(audio, 22050, middle_loops, 180.0)
+
+        # Intro section (penalized)
+        intro_loops = [(5.0, 25.0, 2)]
+        intro_score = score_loop_naturalness(audio, 22050, intro_loops, 180.0)
+
+        # Middle should score higher or equal
+        assert middle_score >= intro_score
+
+    def test_loop_transitions_empty(self):
+        """Test loop transitions with no loops."""
+        audio = np.random.randn(22050 * 180)
+        score = score_loop_transitions(audio, 22050, [])
+        assert score == 15.0  # Neutral score
+
+    def test_loop_transitions_single(self):
+        """Test loop transitions with a single loop."""
+        audio = np.random.randn(22050 * 180)
+        loop_points = [(40.0, 60.0, 2)]
+        score = score_loop_transitions(audio, 22050, loop_points)
+
+        # Should produce a valid score
+        assert 0.0 <= score <= 30.0
+
+    def test_loop_transitions_multiple(self):
+        """Test loop transitions with multiple loops."""
+        audio = np.random.randn(22050 * 180)
+        loop_points = [(40.0, 60.0, 2), (100.0, 120.0, 3)]
+        score = score_loop_transitions(audio, 22050, loop_points)
+
+        # Should produce a valid score
+        assert 0.0 <= score <= 30.0
+
+    def test_loop_transitions_short_section(self):
+        """Test loop transitions handles short sections gracefully."""
+        audio = np.random.randn(22050 * 180)
+        # Very short section (less than 2x boundary duration)
+        loop_points = [(40.0, 40.5, 2)]
+        score = score_loop_transitions(audio, 22050, loop_points)
+
+        # Should handle gracefully and give partial credit
+        assert 0.0 <= score <= 30.0
