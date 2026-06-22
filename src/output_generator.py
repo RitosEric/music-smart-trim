@@ -104,8 +104,9 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
         fade_in_duration = min(crossfade_samples, len(final_segment) // 2)
         final_segment = apply_smooth_fade_in(final_segment, fade_in_duration)
 
-        # Apply longer fade-out (3 seconds) to smooth any abrupt drops at the end
-        fade_out_duration = min(int(3 * sr), len(final_segment) // 2)
+        # Apply longer fade-out (5 seconds) to smooth any abrupt drops at the end
+        # Some songs have very abrupt natural fade-outs that need longer smoothing
+        fade_out_duration = min(int(5 * sr), len(final_segment) // 2)
         if fade_out_duration > 0:
             final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
 
@@ -178,9 +179,9 @@ def apply_loops(audio: np.ndarray, sr: int, loop_points: List[Tuple[float, float
     if last_end < len(audio):
         final_segment = audio[last_end:]
 
-        # Apply longer fade-out (3 seconds) to smooth any abrupt drops at the end
-        # This handles songs with abrupt natural fade-outs
-        fade_out_duration = min(int(3 * sr), len(final_segment) // 2)
+        # Apply longer fade-out (5 seconds) to smooth any abrupt drops at the end
+        # Some songs have very abrupt natural fade-outs that need longer smoothing
+        fade_out_duration = min(int(5 * sr), len(final_segment) // 2)
         if fade_out_duration > 0:
             from src.crossfade import apply_smooth_fade_out
             final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
