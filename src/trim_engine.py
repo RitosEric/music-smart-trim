@@ -167,7 +167,12 @@ def select_middle_region_cuts(
     sections: List[Dict],
     original_length: float,
     target_removal: float,
-    prioritize_chorus_preservation: bool = True
+    prioritize_chorus_preservation: bool = True,
+    similarity_filter: float = 0.0,
+    section_priority_weights: Optional[Dict[str, float]] = None,
+    randomize_order: bool = False,
+    random_seed: Optional[int] = None,
+    max_cuts: Optional[int] = None
 ) -> List[Tuple[float, float]]:
     """
     Select cuts prioritizing chorus preservation and smooth transitions.
@@ -179,20 +184,51 @@ def select_middle_region_cuts(
     - Never remove ALL choruses
     - Ensure smooth transitions with proper crossfades
 
+    NEW DIVERSITY PARAMETERS:
+    - similarity_filter: Minimum similarity threshold for considering cuts (applied to cluster avg)
+    - section_priority_weights: Custom weights for section types (LOWER = cut first, HIGHER = keep)
+    - randomize_order: Randomize selection within priority groups
+    - random_seed: Seed for randomization
+    - max_cuts: Maximum number of cuts to select
+
     Args:
         clusters: List of cluster dicts with segment_times, avg_similarity
         sections: List of section dicts with start, end, label
         original_length: Original audio length
         target_removal: How much time to remove
         prioritize_chorus_preservation: If True, keep at least 1 chorus
+        similarity_filter: Only consider clusters with avg_similarity >= this threshold
+        section_priority_weights: Custom priority weights (LOWER = cut first, HIGHER = keep)
+        randomize_order: If True, randomize selection within same priority level
+        random_seed: Random seed for reproducible randomization
+        max_cuts: Maximum number of cuts to return (None = unlimited)
 
     Returns:
         List of (start, end) cut tuples prioritized by section importance
     """
+    # Set random seed if randomization is enabled
+    if randomize_order and random_seed is not None:
+        np.random.seed(random_seed)
+
+    # Default section weights (LOWER priority = cut first, HIGHER priority = keep)
+    if section_priority_weights is None:
+        section_priority_weights = {
+            "verse": 1.0,
+            "bridge": 2.0,
+            "chorus": 3.0,
+            "intro": 0.5,
+            "outro": 0.5,
+            "unknown": 1.5
+        }
+
     # Collect all potential cuts with their section labels
     potential_cuts = []
 
     for cluster in clusters:
+        # Apply similarity filter at cluster level
+        if cluster['avg_similarity'] < similarity_filter:
+            continue
+
         segment_times = cluster['segment_times']
         if len(segment_times) < 2:
             continue
@@ -219,27 +255,8 @@ def select_middle_region_cuts(
                     section_index = idx
                     break
 
-            # Assign priority based on section label
-            if prioritize_chorus_preservation:
-                if section_label == "chorus":
-                    priority = 3  # Lower priority = cut later (keep choruses)
-                elif section_label == "verse":
-                    priority = 1  # Higher priority = cut first
-                elif section_label == "bridge":
-                    priority = 2  # Medium priority
-                else:  # intro, outro, unknown
-                    priority = 0  # Very low priority = don't cut unless necessary
-            else:
-                # Original behavior: prioritize middle region
-                cut_center = (cut_start + cut_end) / 2
-                middle_start = original_length * 0.2
-                middle_end = original_length * 0.8
-
-                if cut_center < middle_start or cut_center > middle_end:
-                    priority = 0
-                else:
-                    center = original_length * 0.5
-                    priority = 1.0 - abs(cut_center - center) / (center * 0.6)
+            # Get priority from section weights (LOWER = cut first)
+            priority = section_priority_weights.get(section_label, 1.5)
 
             potential_cuts.append({
                 'start': cut_start,
@@ -269,16 +286,29 @@ def select_middle_region_cuts(
             c['start'] == first_chorus['start']
         )]
 
-    # Sort by priority (higher priority = cut first)
+    # Sort by priority (LOWER priority = cut first)
     # Within same priority, prefer cuts with higher similarity
-    potential_cuts.sort(key=lambda x: (-x['priority'], -x['similarity']))
+    potential_cuts.sort(key=lambda x: (x['priority'], -x['similarity']))
 
-    # Select cuts until we reach target removal
+    # Apply randomization within priority groups if requested
+    if randomize_order:
+        # Group by priority level (rounded to 0.5)
+        from itertools import groupby
+        grouped = []
+        for priority, group in groupby(potential_cuts, key=lambda x: round(x['priority'] * 2) / 2):
+            group_list = list(group)
+            np.random.shuffle(group_list)
+            grouped.extend(group_list)
+        potential_cuts = grouped
+
+    # Select cuts until we reach target removal or max_cuts
     selected_cuts = []
     total_removed = 0.0
 
     for cut in potential_cuts:
         if total_removed >= target_removal:
+            break
+        if max_cuts is not None and len(selected_cuts) >= max_cuts:
             break
 
         selected_cuts.append((cut['start'], cut['end']))
@@ -292,23 +322,26 @@ def generate_strategy(
     clusters: List[Dict],
     original_length: float,
     target_length: float,
-    buffer: float = 0.0,
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: Optional[int] = None
 ) -> TrimStrategy:
     """
-    Unified strategy generation with configurable parameters.
+    Unified strategy generation with truly diverse parameter configurations.
 
-    Consolidates conservative/balanced/aggressive strategy generation into a single
-    parameterized function to eliminate code duplication.
+    Creates genuinely different strategies by varying:
+    - Similarity filtering thresholds
+    - Section priority weights
+    - Cut merging aggressiveness
+    - Length buffers
+    - Alignment modes
+    - Randomization
 
     Args:
-        strategy_type: Type of strategy - "conservative", "balanced", or "aggressive"
+        strategy_type: One of "best", "diverse", "varied", "balanced", "conservative"
         clusters: List of cluster dicts with segment_times, avg_similarity, duration
         original_length: Original audio length in seconds
         target_length: Target length in seconds
-        buffer: Buffer in seconds to stay away from target (default: 0.0)
         sections: List of section dicts (for boundary alignment)
         downbeats: Array of downbeat times (for beat alignment)
         regenerate_seed: Optional seed for randomization
@@ -319,63 +352,98 @@ def generate_strategy(
     Raises:
         ValueError: If strategy_type is not recognized
     """
-    # Strategy-specific parameters: (max_gap, fade_duration, alignment_mode)
-    STRATEGY_PARAMS = {
-        "conservative": {
+    # Strategy-specific configurations with DIVERSE parameters
+    # Note: In trim mode, LOWER priority weight = cut first, HIGHER = preserve
+    # Expected order: conservative > best > balanced > diverse > varied
+    STRATEGY_CONFIGS = {
+        "best": {
+            "similarity_filter": 0.80,  # High-quality cuts only
+            "section_weights": {"verse": 1.3, "bridge": 2.5, "chorus": 3.0, "intro": 0.3, "outro": 0.3, "unknown": 1.8},
             "max_gap": 3.0,
-            "fade_duration": ms_to_fade_duration(CROSSFADE_CONSERVATIVE_MS),
-            "alignment": "section",  # Align to section boundaries
+            "buffer": 3.0,  # Stay 3s away from target (longer result)
+            "alignment": "section",
+            "randomize": False,
+            "max_cuts": 2  # Fewer cuts for cleaner result
+        },
+        "diverse": {
+            "similarity_filter": 0.72,  # Lower threshold for more options
+            "section_weights": {"verse": 0.9, "bridge": 1.8, "chorus": 3.2, "intro": 0.4, "outro": 0.4, "unknown": 1.3},
+            "max_gap": 2.5,
+            "buffer": 1.5,  # Moderate distance from target
+            "alignment": "section",
+            "randomize": True,  # Add randomization
+            "max_cuts": None
+        },
+        "varied": {
+            "similarity_filter": 0.65,  # Lowest threshold = most cut options
+            "section_weights": {"verse": 0.7, "bridge": 1.2, "chorus": 2.8, "intro": 0.35, "outro": 0.35, "unknown": 1.0},
+            "max_gap": 1.0,  # Aggressive merging
+            "buffer": 0.5,  # Very close to target
+            "alignment": "downbeat",  # Different alignment mode
+            "randomize": True,
+            "max_cuts": None  # Allow more cuts
         },
         "balanced": {
+            "similarity_filter": 0.75,
+            "section_weights": {"verse": 1.1, "bridge": 2.1, "chorus": 3.0, "intro": 0.5, "outro": 0.5, "unknown": 1.6},
             "max_gap": 2.0,
-            "fade_duration": ms_to_fade_duration(CROSSFADE_BALANCED_MS),
-            "alignment": "section",  # Align to section boundaries
+            "buffer": 2.0,  # Moderate buffer
+            "alignment": "section",
+            "randomize": False,
+            "max_cuts": 3  # Moderate number of cuts
         },
-        "aggressive": {
-            "max_gap": 1.0,
-            "fade_duration": ms_to_fade_duration(CROSSFADE_AGGRESSIVE_MS),
-            "alignment": "downbeat",  # Align to downbeats only (less conservative)
+        "conservative": {
+            "similarity_filter": 0.85,  # Very high quality only
+            "section_weights": {"verse": 1.5, "bridge": 2.8, "chorus": 4.0, "intro": 0.2, "outro": 0.2, "unknown": 2.0},
+            "max_gap": 4.0,  # Maximum merging
+            "buffer": 4.5,  # Stay well away from target (longest result)
+            "alignment": "section",
+            "randomize": False,
+            "max_cuts": 1  # Fewest cuts - single long removal
         },
     }
 
-    if strategy_type not in STRATEGY_PARAMS:
-        raise ValueError(f"Unknown strategy_type: {strategy_type}. Must be one of {list(STRATEGY_PARAMS.keys())}")
+    if strategy_type not in STRATEGY_CONFIGS:
+        raise ValueError(f"Unknown strategy_type: {strategy_type}. Must be one of {list(STRATEGY_CONFIGS.keys())}")
 
-    params = STRATEGY_PARAMS[strategy_type]
+    config = STRATEGY_CONFIGS[strategy_type]
 
     # Common initialization
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-
     if downbeats is None:
         downbeats = np.array([])
     if sections is None:
         sections = []
 
     # Calculate amount to remove with buffer
-    amount_to_remove = max(0, original_length - target_length - buffer)
+    amount_to_remove = max(0, original_length - target_length - config["buffer"])
 
-    # Select cuts from middle region with chorus preservation
+    # Select cuts with strategy-specific parameters
     raw_cuts = select_middle_region_cuts(
         clusters, sections, original_length, amount_to_remove,
-        prioritize_chorus_preservation=True
+        prioritize_chorus_preservation=True,
+        similarity_filter=config["similarity_filter"],
+        section_priority_weights=config["section_weights"],
+        randomize_order=config["randomize"],
+        random_seed=regenerate_seed,
+        max_cuts=config["max_cuts"]
     )
 
     # Align cuts based on strategy
     aligned_cuts = []
     for cut_start, cut_end in raw_cuts:
-        if params["alignment"] == "section":
+        if config["alignment"] == "section":
             aligned = align_to_section_boundaries(cut_start, cut_end, sections, downbeats)
         else:  # downbeat
             aligned = align_to_downbeats(cut_start, cut_end, downbeats)
         aligned_cuts.append(aligned)
 
     # Merge adjacent cuts
-    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=params["max_gap"])
+    merged_cuts = merge_adjacent_cuts(aligned_cuts, max_gap=config["max_gap"])
 
-    # Create fade regions
+    # Create fade regions (use standard 500ms fade)
+    fade_duration = ms_to_fade_duration(500)  # Standard 500ms crossfade
     fade_regions = [
-        (cut_start - params["fade_duration"], cut_start + params["fade_duration"])
+        (cut_start - fade_duration, cut_start + fade_duration)
         for cut_start, _ in merged_cuts
     ]
 
@@ -397,21 +465,26 @@ def generate_trim_strategies(
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None,
-    num_strategies: int = 10
+    num_strategies: int = 5
 ) -> List[TrimStrategy]:
     """
-    Generate multiple diverse trim strategies with section-aware, back-to-back cutting.
+    Generate multiple diverse trim strategies with truly different approaches.
 
-    NEW IN V6:
-    - Generate 10 diverse strategies (not just 3)
-    - Varied aggressiveness levels (buffers from 0s to 4.5s)
-    - Different random seeds for each strategy to ensure diversity
-    - Mix of conservative, balanced, and aggressive approaches
+    NEW IN V8 (BUG FIX):
+    - Generate 5 TRULY diverse strategies (not 10 identical ones)
+    - Each strategy uses different parameter configurations:
+      * best: High-quality cuts, conservative merging, longer result
+      * diverse: Balanced with randomization for variety
+      * varied: Alternative patterns, aggressive merging, closer to target
+      * balanced: Middle ground approach
+      * conservative: Maximum structure preservation, fewest cuts
+    - Different similarity filters, section weights, merging strategies
+    - Real diversity in cut patterns and output lengths
 
-    V5 FEATURES:
+    V7 FEATURES:
     - Section boundary alignment (no mid-verse/chorus cuts)
+    - Chorus preservation (keep at least 1 chorus)
     - Back-to-back cut merging (continuous removal from middle)
-    - Middle-region prioritization (radio edit feel)
     - Beat-aligned cutting on downbeats
     - Iterative refinement to ±15s
 
@@ -422,62 +495,30 @@ def generate_trim_strategies(
         sections: List of section dicts with start, end, label (from structure_analyzer)
         downbeats: Array of downbeat times (from structure_analyzer)
         regenerate_seed: Optional seed for randomization
-        num_strategies: Number of strategies to generate (default: 10)
+        num_strategies: Number of strategies to generate (default: 5)
 
     Returns:
-        List of TrimStrategy objects (default: 10 strategies with varied approaches)
+        List of TrimStrategy objects with genuinely different approaches
     """
+    # Define strategy types with descriptive names
+    strategy_types = ["best", "diverse", "varied", "balanced", "conservative"]
+
     strategies = []
     base_seed = regenerate_seed if regenerate_seed is not None else 0
 
-    # Generate 10 diverse strategies with different parameters
-    strategy_configs = [
-        # Conservative variants (buffers: 3.0-4.5s)
-        ("conservative", 0, 3.0),
-        ("conservative", 1, 3.5),
-        ("conservative", 2, 4.0),
-        ("conservative", 3, 4.5),
-        # Balanced variants (buffers: 1.5-2.5s)
-        ("balanced", 4, 1.5),
-        ("balanced", 5, 2.0),
-        ("balanced", 6, 2.5),
-        # Aggressive variants (buffers: 0.0-1.0s)
-        ("aggressive", 7, 0.0),
-        ("aggressive", 8, 0.5),
-        ("aggressive", 9, 1.0),
-    ]
+    # Generate strategies with truly different configurations
+    for i, strategy_type in enumerate(strategy_types[:num_strategies]):
+        strategy_seed = base_seed + i
 
-    for strategy_type, seed_offset, buffer in strategy_configs:
-        strategy_seed = base_seed + seed_offset
-
-        if strategy_type == "conservative":
-            # Manually adjust the buffer in conservative strategy
-            strategy = generate_conservative_strategy_with_buffer(
-                clusters, original_length, target_length,
-                buffer=buffer,
-                sections=sections,
-                downbeats=downbeats,
-                regenerate_seed=strategy_seed
-            )
-            strategy.name = f"conservative_{seed_offset+1}"
-        elif strategy_type == "balanced":
-            strategy = generate_balanced_strategy_with_buffer(
-                clusters, original_length, target_length,
-                buffer=buffer,
-                sections=sections,
-                downbeats=downbeats,
-                regenerate_seed=strategy_seed
-            )
-            strategy.name = f"balanced_{seed_offset-3}"
-        else:  # aggressive
-            strategy = generate_aggressive_strategy_with_buffer(
-                clusters, original_length, target_length,
-                buffer=buffer,
-                sections=sections,
-                downbeats=downbeats,
-                regenerate_seed=strategy_seed
-            )
-            strategy.name = f"aggressive_{seed_offset-6}"
+        strategy = generate_strategy(
+            strategy_type,
+            clusters,
+            original_length,
+            target_length,
+            sections=sections,
+            downbeats=downbeats,
+            regenerate_seed=strategy_seed
+        )
 
         strategies.append(strategy)
 
@@ -598,395 +639,59 @@ def refine_strategy_for_length(
         strategy.fade_regions.append((trim_start - 0.05, trim_start + 0.05))
 
 
-def generate_conservative_strategy_with_buffer(
-    clusters: List[Dict],
-    original_length: float,
-    target_length: float,
-    buffer: float,
-    sections: Optional[List[Dict]] = None,
-    downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: int = None
-) -> TrimStrategy:
-    """Generate conservative strategy with custom buffer (delegates to generate_strategy)."""
-    return generate_strategy(
-        "conservative", clusters, original_length, target_length,
-        buffer, sections, downbeats, regenerate_seed
-    )
-
-
-def generate_balanced_strategy_with_buffer(
-    clusters: List[Dict],
-    original_length: float,
-    target_length: float,
-    buffer: float,
-    sections: Optional[List[Dict]] = None,
-    downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: int = None
-) -> TrimStrategy:
-    """Generate balanced strategy with custom buffer (delegates to generate_strategy)."""
-    return generate_strategy(
-        "balanced", clusters, original_length, target_length,
-        buffer, sections, downbeats, regenerate_seed
-    )
-
-
-def generate_aggressive_strategy_with_buffer(
-    clusters: List[Dict],
-    original_length: float,
-    target_length: float,
-    buffer: float,
-    sections: Optional[List[Dict]] = None,
-    downbeats: Optional[np.ndarray] = None,
-    regenerate_seed: int = None
-) -> TrimStrategy:
-    """Generate aggressive strategy with custom buffer (delegates to generate_strategy)."""
-    return generate_strategy(
-        "aggressive", clusters, original_length, target_length,
-        buffer, sections, downbeats, regenerate_seed
-    )
-
-
-def analyze_boundary_energy(
-    audio: np.ndarray,
-    sr: int,
-    start: float,
-    end: float,
-    boundary_duration: float = 0.5
-) -> Tuple[float, float]:
-    """
-    Extract and calculate RMS energy for start/end boundaries of a section.
-
-    Args:
-        audio: Audio data array
-        sr: Sample rate
-        start: Section start time in seconds
-        end: Section end time in seconds
-        boundary_duration: Duration of boundary regions to analyze (default: 0.5s)
-
-    Returns:
-        Tuple of (start_energy, end_energy) as RMS values
-    """
-    start_sample = int(start * sr)
-    end_sample = int(end * sr)
-    boundary_samples = int(boundary_duration * sr)
-
-    # Check if section is long enough for boundary analysis
-    if end_sample - start_sample <= 2 * boundary_samples:
-        return 0.0, 0.0
-
-    # Extract boundary regions
-    start_region = audio[start_sample:start_sample + boundary_samples]
-    end_region = audio[end_sample - boundary_samples:end_sample]
-
-    # Calculate RMS energy
-    start_energy = np.sqrt(np.mean(start_region ** 2))
-    end_energy = np.sqrt(np.mean(end_region ** 2))
-
-    return start_energy, end_energy
-
-
-def score_section_repeatability(
-    section: Dict,
-    audio: np.ndarray,
-    sr: int,
-    sections: List[Dict]
-) -> float:
-    """
-    Score how well a section can be repeated seamlessly.
-
-    Evaluates naturalness of looping based on:
-    - Section type priority (chorus > verse > bridge > intro/outro)
-    - Duration suitability (12-30s ideal for repetition)
-    - Energy consistency at boundaries
-    - Position in song (avoid intro/outro)
-
-    Args:
-        section: Section dict with start, end, label
-        audio: Audio data array
-        sr: Sample rate
-        sections: All sections for context
-
-    Returns:
-        Repeatability score (0.0-1.0, higher = better for looping)
-    """
-    import librosa
-
-    start = section['start']
-    end = section['end']
-    label = section.get('label', '').lower()
-    duration = end - start
-
-    score = 0.0
-
-    # 1. Section Type Priority (0.0-0.4)
-    if 'chorus' in label:
-        score += 0.4  # Choruses are ideal for repetition
-    elif 'hook' in label:
-        score += 0.35
-    elif 'verse' in label:
-        score += 0.25
-    elif 'bridge' in label:
-        score += 0.2
-    elif 'intro' in label or 'outro' in label:
-        score += 0.0  # Avoid repeating intro/outro
-    else:
-        score += 0.15  # Unknown sections get low score
-
-    # 2. Duration Suitability (0.0-0.25)
-    if 12.0 <= duration <= 30.0:
-        score += 0.25  # Ideal duration for looping
-    elif 8.0 <= duration < 12.0:
-        score += 0.15  # Acceptable but short
-    elif 30.0 < duration <= 45.0:
-        score += 0.15  # Acceptable but long
-    else:
-        score += 0.05  # Too short or too long
-
-    # 3. Position in Song (0.0-0.15)
-    # Avoid first/last 10% of song (intro/outro regions)
-    if sections:
-        total_length = sections[-1]['end']
-        relative_start = start / total_length
-        relative_end = end / total_length
-
-        if 0.15 < relative_start < 0.85 and 0.15 < relative_end < 0.85:
-            score += 0.15  # Middle section, good for looping
-        elif 0.10 < relative_start < 0.90:
-            score += 0.08  # Near middle
-        else:
-            score += 0.0  # Too close to edges
-
-    # 4. Energy Consistency at Boundaries (0.0-0.2)
-    try:
-        # Use shared helper function for boundary analysis
-        start_energy, end_energy = analyze_boundary_energy(audio, sr, start, end, boundary_duration=0.5)
-
-        # Similar energy at boundaries = better loop point
-        if start_energy > 0 and end_energy > 0:
-            energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
-            score += 0.2 * energy_ratio  # 0-0.2 based on similarity
-        else:
-            score += 0.05  # Silent boundaries
-    except Exception:
-        score += 0.1  # Neutral score if boundary analysis fails
-
-    return min(score, 1.0)  # Cap at 1.0
-
-
-def generate_extension_strategy(
+def generate_strategies(
+    mode: str,
     clusters: List[Dict],
     original_length: float,
     target_length: float,
     sections: Optional[List[Dict]] = None,
     downbeats: Optional[np.ndarray] = None,
-    audio_data: Optional[np.ndarray] = None,
-    sample_rate: Optional[int] = None,
-    strategy_type: str = "balanced",
-    regenerate_seed: Optional[int] = None
-) -> TrimStrategy:
-    """
-    Generate extension strategy by repeating high-quality sections.
-
-    Strategy:
-    - Score all sections for repeatability
-    - Select best sections to repeat (prefer choruses)
-    - Distribute repetitions to reach target length
-    - Align to section boundaries and downbeats
-    - Apply crossfades for smooth transitions
-
-    Args:
-        clusters: List of cluster dicts (unused in extension, kept for API consistency with trim mode)
-        original_length: Original audio length in seconds
-        target_length: Target length in seconds (must be > original_length)
-        sections: List of section dicts with start, end, label
-        downbeats: Array of downbeat times
-        audio_data: Audio data for boundary analysis
-        sample_rate: Sample rate for boundary analysis
-        strategy_type: "conservative", "balanced", or "aggressive"
-        regenerate_seed: Optional seed for randomization
-
-    Returns:
-        TrimStrategy with populated loop_points for extension
-    """
-    if regenerate_seed is not None:
-        np.random.seed(regenerate_seed)
-
-    if downbeats is None:
-        downbeats = np.array([])
-    if sections is None:
-        sections = []
-
-    # Validate that we're extending, not trimming
-    if target_length <= original_length:
-        raise ValueError(f"Extension requires target_length > original_length ({target_length} <= {original_length})")
-
-    # Calculate how much extension is needed
-    extension_needed = target_length - original_length
-
-    # Strategy-specific parameters
-    STRATEGY_PARAMS = {
-        "conservative": {
-            "max_repeats_per_section": 2,  # Repeat each section at most 2 times
-            "fade_duration": ms_to_fade_duration(CROSSFADE_CONSERVATIVE_MS),
-        },
-        "balanced": {
-            "max_repeats_per_section": 3,  # Repeat each section at most 3 times
-            "fade_duration": ms_to_fade_duration(CROSSFADE_BALANCED_MS),
-        },
-        "aggressive": {
-            "max_repeats_per_section": 5,  # Repeat each section at most 5 times
-            "fade_duration": ms_to_fade_duration(CROSSFADE_AGGRESSIVE_MS),
-        },
-    }
-
-    params = STRATEGY_PARAMS.get(strategy_type, STRATEGY_PARAMS["balanced"])
-
-    # Score all sections for repeatability
-    section_scores = []
-    for section in sections:
-        score = score_section_repeatability(
-            section, audio_data, sample_rate, sections
-        ) if audio_data is not None and sample_rate is not None else 0.5
-
-        section_scores.append({
-            'section': section,
-            'score': score,
-            'duration': section['end'] - section['start']
-        })
-
-    # Sort by repeatability score (highest first)
-    section_scores.sort(key=lambda x: x['score'], reverse=True)
-
-    # Select sections to repeat and calculate repetition counts
-    loop_points = []
-    total_extension = 0.0
-    section_repeat_counts = {}  # Track how many times each section is repeated
-    section_index = 0  # Track position in sorted list
-
-    while total_extension < extension_needed and section_index < len(section_scores):
-        # Get best remaining section
-        best = section_scores[section_index]
-        section = best['section']
-        section_id = f"{section['start']}-{section['end']}"
-
-        # Check if we've hit max repeats for this section
-        current_repeats = section_repeat_counts.get(section_id, 0)
-        if current_repeats >= params["max_repeats_per_section"]:
-            section_index += 1  # Move to next candidate
-            continue
-
-        # Add one repetition of this section
-        duration = best['duration']
-        remaining_extension = extension_needed - total_extension
-
-        # Don't add if it would overshoot by more than 30%
-        if duration > remaining_extension * 1.3:
-            # Try next best section
-            section_index += 1  # Move to next candidate
-            continue
-
-        # Align to section boundaries
-        loop_start = section['start']
-        loop_end = section['end']
-
-        # Align to downbeats if available
-        if len(downbeats) > 0:
-            loop_start = find_nearest_downbeat(loop_start, downbeats)
-            loop_end = find_nearest_downbeat(loop_end, downbeats)
-
-        # Add loop point (we'll insert 1 additional copy, so repeat_count = 2)
-        loop_points.append((loop_start, loop_end, 2))
-        total_extension += (loop_end - loop_start)
-        section_repeat_counts[section_id] = current_repeats + 1
-
-    # Create fade regions at loop boundaries
-    fade_regions = []
-    fade_duration = params["fade_duration"]
-    for loop_start, loop_end, _ in loop_points:
-        # Add fade at the start of the loop insertion point
-        fade_regions.append((loop_start - fade_duration, loop_start + fade_duration))
-
-    return TrimStrategy(
-        name=f"extension_{strategy_type}",
-        cut_points=[],  # No cuts for extension
-        loop_points=loop_points,
-        fade_regions=fade_regions,
-        target_length=target_length
-    )
-
-
-
-
-def generate_extension_strategies(
-    clusters: List[Dict],
-    original_length: float,
-    target_length: float,
-    sections: Optional[List[Dict]] = None,
-    downbeats: Optional[np.ndarray] = None,
-    audio_data: Optional[np.ndarray] = None,
-    sample_rate: Optional[int] = None,
-    regenerate_seed: Optional[int] = None,
-    num_strategies: int = 10
+    regenerate_seed: int = None,
+    num_strategies: int = 5
 ) -> List[TrimStrategy]:
     """
-    Generate multiple diverse extension strategies.
+    Unified interface for generating trim or extension strategies.
 
-    Creates varied approaches to extending audio by repeating sections:
-    - Conservative: minimal repetitions (max 2x per section)
-    - Balanced: moderate repetitions (max 3x per section)
-    - Aggressive: more repetitions (max 5x per section)
+    Routes to the appropriate implementation based on mode.
 
     Args:
-        clusters: List of cluster dicts (for consistency with trim API)
+        mode: "trim" for trimming strategies, "extend" for extension strategies
+        clusters: List of segment cluster dicts
         original_length: Original audio length in seconds
-        target_length: Target length in seconds (must be > original_length)
-        sections: List of section dicts with start, end, label
-        downbeats: Array of downbeat times
-        audio_data: Audio data for boundary analysis
-        sample_rate: Sample rate
-        regenerate_seed: Optional seed for randomization
-        num_strategies: Number of strategies to generate (default: 10)
+        target_length: Target audio length in seconds
+        sections: Optional list of section dicts with start, end, label
+        downbeats: Optional array of downbeat times
+        regenerate_seed: Optional seed for reproducible randomization
+        num_strategies: Number of strategies to generate (default: 5)
 
     Returns:
-        List of TrimStrategy objects with populated loop_points
+        List of TrimStrategy objects
+
+    Raises:
+        ValueError: If mode is not "trim" or "extend"
     """
-    strategies = []
-    base_seed = regenerate_seed if regenerate_seed is not None else 0
+    if mode == "trim":
+        return generate_trim_strategies(
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            sections=sections,
+            downbeats=downbeats,
+            regenerate_seed=regenerate_seed,
+            num_strategies=num_strategies
+        )
+    elif mode == "extend":
+        from src.extension_engine import generate_extension_strategies
+        return generate_extension_strategies(
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            sections=sections,
+            downbeats=downbeats,
+            regenerate_seed=regenerate_seed,
+            num_strategies=num_strategies
+        )
+    else:
+        raise ValueError(f"Invalid mode: {mode}. Must be 'trim' or 'extend'.")
 
-    # Generate 10 diverse strategies with different parameters
-    strategy_configs = [
-        # Conservative variants (max 2 repeats per section)
-        ("conservative", 0),
-        ("conservative", 1),
-        ("conservative", 2),
-        ("conservative", 3),
-        # Balanced variants (max 3 repeats per section)
-        ("balanced", 4),
-        ("balanced", 5),
-        ("balanced", 6),
-        # Aggressive variants (max 5 repeats per section)
-        ("aggressive", 7),
-        ("aggressive", 8),
-        ("aggressive", 9),
-    ]
 
-    for i, (strategy_type, seed_offset) in enumerate(strategy_configs[:num_strategies]):
-        strategy_seed = base_seed + seed_offset
-
-        try:
-            strategy = generate_extension_strategy(
-                clusters, original_length, target_length,
-                sections=sections,
-                downbeats=downbeats,
-                audio_data=audio_data,
-                sample_rate=sample_rate,
-                strategy_type=strategy_type,
-                regenerate_seed=strategy_seed
-            )
-            strategy.name = f"extension_{strategy_type}_{i+1}"
-            strategies.append(strategy)
-        except Exception as e:
-            print(f"⚠️  Failed to generate {strategy_type} extension strategy {i+1}: {e}")
-            continue
-
-    return strategies

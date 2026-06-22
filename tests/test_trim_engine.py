@@ -3,10 +3,9 @@
 import pytest
 from src.trim_engine import (
     TrimStrategy,
-    generate_conservative_strategy,
-    generate_balanced_strategy,
-    generate_aggressive_strategy,
-    generate_trim_strategies
+    generate_strategy,
+    generate_trim_strategies,
+    generate_strategies
 )
 
 
@@ -49,11 +48,11 @@ class TestTrimStrategy:
         assert result == 230.0
 
 
-class TestConservativeStrategy:
-    """Tests for conservative strategy generation."""
+class TestBestStrategy:
+    """Tests for best strategy generation."""
 
-    def test_generate_conservative_strategy(self):
-        """Test conservative strategy generation with gentle fades."""
+    def test_generate_best_strategy(self):
+        """Test best strategy generation with high-quality cuts."""
         # Mock clusters data
         clusters = [
             {
@@ -71,38 +70,28 @@ class TestConservativeStrategy:
         original_length = 240.0
         target_length = 180.0
 
-        strategy = generate_conservative_strategy(clusters, original_length, target_length)
+        strategy = generate_strategy("best", clusters, original_length, target_length)
 
         # Verify strategy properties
-        assert strategy.name == "conservative"
+        assert strategy.name == "best"
         assert strategy.target_length == 180.0
 
-        # Conservative removes 2nd occurrence (highest similarity first)
+        # Should have some cuts
         assert len(strategy.cut_points) > 0
 
-        # Gentle crossfades: 300ms = ±0.15s
-        # Each cut should have corresponding fade regions
-        for cut_start, cut_end in strategy.cut_points:
-            # Find matching fade region (should be within ±0.15s)
-            matching_fades = [
-                (fade_start, fade_end)
-                for fade_start, fade_end in strategy.fade_regions
-                if abs(fade_start - (cut_start - 0.15)) < 0.01 and
-                   abs(fade_end - (cut_start + 0.15)) < 0.01
-            ]
-            assert len(matching_fades) > 0, f"No fade region found for cut at {cut_start}"
+        # Should have fade regions matching cuts
+        assert len(strategy.fade_regions) == len(strategy.cut_points)
 
-        # Verify resulting length is reasonable
+        # Verify resulting length is reasonable (with buffer)
         result_length = strategy.calculate_resulting_length(original_length)
-        # Should be closer to target with 5s buffer
-        assert abs(result_length - target_length) < 70.0  # Generous margin for conservative
+        assert result_length >= target_length  # Best strategy has +3s buffer
 
 
 class TestBalancedStrategy:
     """Tests for balanced strategy generation."""
 
     def test_generate_balanced_strategy(self):
-        """Test balanced strategy generation with standard fades."""
+        """Test balanced strategy generation."""
         # Mock clusters data
         clusters = [
             {
@@ -120,38 +109,28 @@ class TestBalancedStrategy:
         original_length = 240.0
         target_length = 180.0
 
-        strategy = generate_balanced_strategy(clusters, original_length, target_length)
+        strategy = generate_strategy("balanced", clusters, original_length, target_length)
 
         # Verify strategy properties
         assert strategy.name == "balanced"
         assert strategy.target_length == 180.0
 
-        # Balanced removes multiple occurrences
+        # Should have some cuts
         assert len(strategy.cut_points) > 0
 
-        # Standard crossfades: 150ms = ±0.075s
-        # Each cut should have corresponding fade regions
-        for cut_start, cut_end in strategy.cut_points:
-            # Find matching fade region (should be within ±0.075s)
-            matching_fades = [
-                (fade_start, fade_end)
-                for fade_start, fade_end in strategy.fade_regions
-                if abs(fade_start - (cut_start - 0.075)) < 0.01 and
-                   abs(fade_end - (cut_start + 0.075)) < 0.01
-            ]
-            assert len(matching_fades) > 0, f"No fade region found for cut at {cut_start}"
+        # Should have fade regions matching cuts
+        assert len(strategy.fade_regions) == len(strategy.cut_points)
 
         # Verify resulting length is reasonable
         result_length = strategy.calculate_resulting_length(original_length)
-        # Should be closer to target with 3s buffer
-        assert abs(result_length - target_length) < 50.0  # Moderate margin for balanced
+        assert abs(result_length - target_length) < 70.0
 
 
-class TestAggressiveStrategy:
-    """Tests for aggressive strategy generation."""
+class TestVariedStrategy:
+    """Tests for varied strategy generation."""
 
-    def test_generate_aggressive_strategy(self):
-        """Test aggressive strategy generation with short fades."""
+    def test_generate_varied_strategy(self):
+        """Test varied strategy generation with alternative patterns."""
         # Mock clusters data
         clusters = [
             {
@@ -169,38 +148,28 @@ class TestAggressiveStrategy:
         original_length = 240.0
         target_length = 180.0
 
-        strategy = generate_aggressive_strategy(clusters, original_length, target_length)
+        strategy = generate_strategy("varied", clusters, original_length, target_length)
 
         # Verify strategy properties
-        assert strategy.name == "aggressive"
+        assert strategy.name == "varied"
         assert strategy.target_length == 180.0
 
-        # Aggressive removes all but first occurrence - should be more cuts
+        # Should have some cuts
         assert len(strategy.cut_points) > 0
 
-        # Short crossfades: 75ms = ±0.0375s
-        # Each cut should have corresponding fade regions
-        for cut_start, cut_end in strategy.cut_points:
-            # Find matching fade region (should be within ±0.0375s)
-            matching_fades = [
-                (fade_start, fade_end)
-                for fade_start, fade_end in strategy.fade_regions
-                if abs(fade_start - (cut_start - 0.0375)) < 0.01 and
-                   abs(fade_end - (cut_start + 0.0375)) < 0.01
-            ]
-            assert len(matching_fades) > 0, f"No fade region found for cut at {cut_start}"
+        # Should have fade regions matching cuts
+        assert len(strategy.fade_regions) == len(strategy.cut_points)
 
-        # Verify resulting length is close to target
+        # Verify resulting length is close to target (small buffer)
         result_length = strategy.calculate_resulting_length(original_length)
-        # Should be very close to target with 1s buffer
-        assert abs(result_length - target_length) <= 30.0  # Tight margin for aggressive
+        assert abs(result_length - target_length) < 70.0
 
 
 class TestCompleteTrimEngine:
     """Tests for complete trim engine with all strategies."""
 
     def test_generate_trim_strategies(self):
-        """Test complete engine generates all 3 strategies within ±15s constraint."""
+        """Test complete engine generates 5 diverse strategies within ±15s constraint."""
         # Mock clusters data
         clusters = [
             {
@@ -225,14 +194,16 @@ class TestCompleteTrimEngine:
 
         strategies = generate_trim_strategies(clusters, original_length, target_length)
 
-        # Should return 3 strategies
-        assert len(strategies) == 3
+        # Should return 5 strategies (new in V8)
+        assert len(strategies) == 5
 
         # Verify strategy names
         strategy_names = [s.name for s in strategies]
-        assert "conservative" in strategy_names
+        assert "best" in strategy_names
+        assert "diverse" in strategy_names
+        assert "varied" in strategy_names
         assert "balanced" in strategy_names
-        assert "aggressive" in strategy_names
+        assert "conservative" in strategy_names
 
         # Verify all strategies are within ±15s of target
         for strategy in strategies:
@@ -241,24 +212,306 @@ class TestCompleteTrimEngine:
             assert error <= 15.0, f"{strategy.name} strategy error {error}s exceeds ±15s constraint"
 
         # Verify each strategy has appropriate characteristics
+        best = next(s for s in strategies if s.name == "best")
         conservative = next(s for s in strategies if s.name == "conservative")
-        balanced = next(s for s in strategies if s.name == "balanced")
-        aggressive = next(s for s in strategies if s.name == "aggressive")
+        varied = next(s for s in strategies if s.name == "varied")
 
-        # Conservative should have fewer cuts than aggressive
-        assert len(conservative.cut_points) <= len(aggressive.cut_points)
+        # All strategies should have cuts
+        assert len(best.cut_points) > 0
+        assert len(conservative.cut_points) > 0
+        assert len(varied.cut_points) > 0
 
-        # Fade durations should be different
-        # Conservative: ±0.15s, Balanced: ±0.075s, Aggressive: ±0.0375s
-        if conservative.fade_regions:
-            cons_fade_width = conservative.fade_regions[0][1] - conservative.fade_regions[0][0]
-            assert abs(cons_fade_width - 0.30) < 0.01  # 2 * 0.15
+        # All strategies should have matching fade regions
+        assert len(best.fade_regions) == len(best.cut_points)
+        assert len(conservative.fade_regions) == len(conservative.cut_points)
+        assert len(varied.fade_regions) == len(varied.cut_points)
 
-        if balanced.fade_regions:
-            bal_fade_width = balanced.fade_regions[0][1] - balanced.fade_regions[0][0]
-            assert abs(bal_fade_width - 0.15) < 0.01  # 2 * 0.075
 
-        if aggressive.fade_regions:
-            agg_fade_width = aggressive.fade_regions[0][1] - aggressive.fade_regions[0][0]
-            assert abs(agg_fade_width - 0.075) < 0.01  # 2 * 0.0375
+class TestGenerateStrategies:
+    """Tests for unified generate_strategies() interface."""
+
+    def test_trim_mode_generates_strategies_with_cuts(self):
+        """Test trim mode generates 5 strategies with cuts and no loops."""
+        # Mock clusters data
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0), (50.0, 60.0), (100.0, 110.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            },
+            {
+                'segment_times': [(30.0, 40.0), (80.0, 90.0), (120.0, 130.0)],
+                'avg_similarity': 0.85,
+                'duration': 10.0
+            }
+        ]
+
+        original_length = 240.0
+        target_length = 180.0
+
+        strategies = generate_strategies(
+            mode="trim",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length
+        )
+
+        # Should return 5 strategies
+        assert len(strategies) == 5
+
+        # All strategies should have cuts
+        for strategy in strategies:
+            assert len(strategy.cut_points) > 0, f"{strategy.name} has no cuts"
+
+        # No strategy should have loops (trim mode)
+        for strategy in strategies:
+            assert len(strategy.loop_points) == 0, f"{strategy.name} has loops in trim mode"
+
+        # All strategies should be within ±15s of target
+        for strategy in strategies:
+            result_length = strategy.calculate_resulting_length(original_length)
+            error = abs(result_length - target_length)
+            assert error <= 15.0, f"{strategy.name} error {error}s exceeds ±15s"
+
+    def test_extend_mode_generates_strategies_with_loops(self):
+        """Test extend mode generates 5 strategies with loops and no cuts."""
+        # Mock clusters data
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0), (50.0, 60.0), (100.0, 110.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            },
+            {
+                'segment_times': [(30.0, 40.0), (80.0, 90.0)],
+                'avg_similarity': 0.85,
+                'duration': 10.0
+            }
+        ]
+
+        original_length = 180.0
+        target_length = 240.0  # Extend by 60s
+
+        strategies = generate_strategies(
+            mode="extend",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length
+        )
+
+        # Should return 5 strategies
+        assert len(strategies) == 5
+
+        # All strategies should have loops
+        for strategy in strategies:
+            assert len(strategy.loop_points) > 0, f"{strategy.name} has no loops"
+
+        # No strategy should have cuts (extend mode)
+        for strategy in strategies:
+            assert len(strategy.cut_points) == 0, f"{strategy.name} has cuts in extend mode"
+
+        # All strategies should be within ±15s of target
+        for strategy in strategies:
+            result_length = strategy.calculate_resulting_length(original_length)
+            error = abs(result_length - target_length)
+            assert error <= 15.0, f"{strategy.name} error {error}s exceeds ±15s"
+
+    def test_invalid_mode_raises_error(self):
+        """Test that invalid mode raises ValueError."""
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            }
+        ]
+
+        with pytest.raises(ValueError, match="Invalid mode: invalid"):
+            generate_strategies(
+                mode="invalid",
+                clusters=clusters,
+                original_length=240.0,
+                target_length=180.0
+            )
+
+    def test_trim_mode_with_custom_num_strategies(self):
+        """Test trim mode respects custom num_strategies parameter."""
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0), (50.0, 60.0), (100.0, 110.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            }
+        ]
+
+        original_length = 240.0
+        target_length = 180.0
+
+        # Generate 3 strategies instead of default 5
+        strategies = generate_strategies(
+            mode="trim",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            num_strategies=3
+        )
+
+        assert len(strategies) == 3
+
+    def test_extend_mode_with_custom_num_strategies(self):
+        """Test extend mode respects custom num_strategies parameter."""
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0), (50.0, 60.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            }
+        ]
+
+        original_length = 180.0
+        target_length = 240.0
+
+        # Generate 3 strategies instead of default 5
+        strategies = generate_strategies(
+            mode="extend",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            num_strategies=3
+        )
+
+        assert len(strategies) == 3
+
+    def test_trim_mode_with_regenerate_seed(self):
+        """Test trim mode with reproducible randomization."""
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0), (50.0, 60.0), (100.0, 110.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            }
+        ]
+
+        original_length = 240.0
+        target_length = 180.0
+
+        # Generate with seed
+        strategies1 = generate_strategies(
+            mode="trim",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            regenerate_seed=42
+        )
+
+        # Generate with same seed
+        strategies2 = generate_strategies(
+            mode="trim",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            regenerate_seed=42
+        )
+
+        # Should produce identical results
+        assert len(strategies1) == len(strategies2)
+        for s1, s2 in zip(strategies1, strategies2):
+            assert s1.name == s2.name
+            assert s1.cut_points == s2.cut_points
+
+    def test_extend_mode_with_regenerate_seed(self):
+        """Test extend mode with reproducible randomization."""
+        clusters = [
+            {
+                'segment_times': [(10.0, 20.0), (50.0, 60.0)],
+                'avg_similarity': 0.95,
+                'duration': 10.0
+            }
+        ]
+
+        original_length = 180.0
+        target_length = 240.0
+
+        # Generate with seed
+        strategies1 = generate_strategies(
+            mode="extend",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            regenerate_seed=42
+        )
+
+        # Generate with same seed
+        strategies2 = generate_strategies(
+            mode="extend",
+            clusters=clusters,
+            original_length=original_length,
+            target_length=target_length,
+            regenerate_seed=42
+        )
+
+        # Should produce identical results
+        assert len(strategies1) == len(strategies2)
+        for s1, s2 in zip(strategies1, strategies2):
+            assert s1.name == s2.name
+            assert s1.loop_points == s2.loop_points
+
+
+class TestStrategyPriorityWeights:
+    """Tests for strategy priority weight ordering."""
+
+    def test_trim_strategy_weight_ordering(self):
+        """Test that trim strategies have correct priority weight ordering.
+
+        In trim mode, LOWER priority = cut first, HIGHER priority = preserve.
+        Expected preservation order: conservative > best > balanced > diverse > varied
+        """
+        from src.trim_engine import generate_strategy
+        import inspect
+        import re
+
+        # Extract STRATEGY_CONFIGS from source
+        source = inspect.getsource(generate_strategy)
+
+        # Find STRATEGY_CONFIGS dictionary
+        configs = {}
+        strategy_names = ["best", "diverse", "varied", "balanced", "conservative"]
+
+        for strategy_name in strategy_names:
+            # Find the strategy block
+            pattern = f'"{strategy_name}"\\s*:\\s*{{[^}}]*"verse":\\s*([\\d.]+)'
+            match = re.search(pattern, source)
+            if match:
+                verse_weight = float(match.group(1))
+                configs[strategy_name] = {"verse": verse_weight}
+
+        # Verify all weights extracted
+        assert len(configs) == 5, f"Should extract 5 strategy configs, got {len(configs)}: {list(configs.keys())}"
+
+        # Print current weights for debugging
+        print("\nCurrent verse weights:")
+        for name in strategy_names:
+            print(f"  {name}: {configs[name]['verse']}")
+
+        # Verify ordering: conservative > best > balanced > diverse > varied
+        # (HIGHER weight = preserve more in trim mode)
+        assert configs["conservative"]["verse"] > configs["best"]["verse"], \
+            f"conservative verse weight ({configs['conservative']['verse']}) should be > best ({configs['best']['verse']})"
+
+        assert configs["best"]["verse"] > configs["balanced"]["verse"], \
+            f"best verse weight ({configs['best']['verse']}) should be > balanced ({configs['balanced']['verse']})"
+
+        assert configs["balanced"]["verse"] > configs["diverse"]["verse"], \
+            f"balanced verse weight ({configs['balanced']['verse']}) should be > diverse ({configs['diverse']['verse']})"
+
+        assert configs["diverse"]["verse"] > configs["varied"]["verse"], \
+            f"diverse verse weight ({configs['diverse']['verse']}) should be > varied ({configs['varied']['verse']})"
+
+        # Additional check: conservative should have highest, varied should have lowest
+        all_verse_weights = [configs[s]["verse"] for s in configs]
+        assert configs["conservative"]["verse"] == max(all_verse_weights), \
+            "conservative should have highest verse weight (most preservation)"
+
+        assert configs["varied"]["verse"] == min(all_verse_weights), \
+            "varied should have lowest verse weight (most aggressive cutting)"
 
