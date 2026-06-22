@@ -605,6 +605,22 @@ def score_strategy(
                 # Add bonus to coherence (capped at 50 points total)
                 coherence_score = min(50.0, coherence_score + mert_bonus)
 
+        # Apply volume consistency penalty for quiet endings
+        # Check if rendered audio has significantly quieter ending than average
+        if rendered_audio is not None and len(rendered_audio) > sr * 3:
+            last_3s = rendered_audio[-int(3 * sr):]
+            last_3s_rms = np.sqrt(np.mean(last_3s**2))
+            avg_rms = np.sqrt(np.mean(rendered_audio**2))
+
+            if avg_rms > 1e-6:  # Avoid division by zero
+                volume_ratio = last_3s_rms / avg_rms
+                # If ending is < 30% of average volume, apply penalty
+                if volume_ratio < 0.3:
+                    # Penalty scales from 0 to 12 points as ratio goes from 0.3 to 0
+                    # This ensures quiet endings (like the 0.05/0.3 = 16.7% case) get 5+ point penalty
+                    penalty = (0.3 - volume_ratio) / 0.3 * 12.0
+                    coherence_score = max(0, coherence_score - penalty)
+
         # Score transition smoothness (30 points max) - ENHANCED
         # Base score from phase alignment and zero-crossings
         transition_score = score_transition_smoothness(
