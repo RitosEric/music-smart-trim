@@ -104,18 +104,9 @@ def apply_cuts(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]
         fade_in_duration = min(crossfade_samples, len(final_segment) // 2)
         final_segment = apply_smooth_fade_in(final_segment, fade_in_duration)
 
-        # Apply fade-out only if audio isn't already fading naturally
-        # Check if last 2s is already quiet (natural fade present)
-        if len(final_segment) >= 2 * sr:
-            last_2s = final_segment[-int(2 * sr):]
-            last_2s_rms = np.sqrt(np.mean(last_2s**2))
-            # If RMS < 0.01 (already very quiet), skip fade to avoid double-fade
-            if last_2s_rms >= 0.01:
-                fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
-                final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
-        else:
-            # Short segment - always apply fade
-            fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
+        # Apply longer fade-out (3 seconds) to smooth any abrupt drops at the end
+        fade_out_duration = min(int(3 * sr), len(final_segment) // 2)
+        if fade_out_duration > 0:
             final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
 
         segments.append(final_segment)
@@ -187,20 +178,11 @@ def apply_loops(audio: np.ndarray, sr: int, loop_points: List[Tuple[float, float
     if last_end < len(audio):
         final_segment = audio[last_end:]
 
-        # Apply fade-out only if audio isn't already fading naturally
-        # Check if last 2s is already quiet (natural fade present)
-        if len(final_segment) >= 2 * sr:
-            last_2s = final_segment[-int(2 * sr):]
-            last_2s_rms = np.sqrt(np.mean(last_2s**2))
-            # If RMS < 0.01 (already very quiet), skip fade to avoid double-fade
-            if last_2s_rms >= 0.01:
-                from src.crossfade import apply_smooth_fade_out
-                fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
-                final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
-        else:
-            # Short segment - always apply fade
+        # Apply longer fade-out (3 seconds) to smooth any abrupt drops at the end
+        # This handles songs with abrupt natural fade-outs
+        fade_out_duration = min(int(3 * sr), len(final_segment) // 2)
+        if fade_out_duration > 0:
             from src.crossfade import apply_smooth_fade_out
-            fade_out_duration = min(crossfade_samples, len(final_segment) // 2)
             final_segment = apply_smooth_fade_out(final_segment, fade_out_duration)
 
         segments.append(final_segment)
