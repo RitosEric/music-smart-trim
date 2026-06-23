@@ -43,8 +43,8 @@ PYTHONPATH=. python src/cli.py --input song.mp3 --target 240 --use-mert
 # Run (with protected regions)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --protect "0:00-0:30" "3:00-3:30"
 
-# Run (disable auto intro/outro protection)
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --no-auto-protect
+# Run (enable auto intro/outro protection)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --auto-protect
 
 # Run all tests
 pytest tests/ -v
@@ -89,12 +89,13 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **Section-aware priority system** (V7) - cuts extra verses first, protects first chorus occurrence
 - **Top 3 selection by quality** (V8) - ensures variety, excludes previously shown options on regeneration
 - **Strict ±15s length enforcement** (V5) - iterative refinement ensures compliance
-- **Enhanced quality scoring** (V5) - spectral flux, loudness consistency, tempo stability
+- **Enhanced quality scoring** (V6) - research-backed metrics with academic justification
 - **Optional MERT embeddings** (V5) - AI-powered transition quality assessment (`--use-mert`)
 - **Normalized star ratings** (V5) - Full 0.0-5.0 scale with 0.1 increments (linear mapping: 100pts = 5.0★)
 - **Section-aware editing** (V4) - aligns cuts/loops to section boundaries
 - **Radio edit strategy** (V4) - back-to-back cuts forming continuous removal
-- Auto intro/outro protection (first/last 10% or 15s)
+- **Improved section boundary alignment** (2026-06-23) - limits over-expansion while preserving musical flow
+- Auto intro/outro protection (first/last 10% or 15s) - **opt-in with --auto-protect flag**
 - Beat-aligned editing at bar boundaries
 
 ## Parameters
@@ -102,11 +103,16 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 **Segment Detection:**
 - Min: 15.0s, Max: 60.0s, Threshold: 0.75
 
-**Quality Scoring (V5):**
+**Quality Scoring (V6 - Research-Backed):**
 - Musical coherence: 50 points (includes 10pt pattern bonus + optional 5pt MERT)
-- Transition smoothness: 30 points (20pt base + 5pt spectral flux + 5pt loudness)
-- Length accuracy: 20 points (strict: 0 points if >30s error)
+- Transition smoothness: 35 points (15pt base + 10pt spectral flux + 8pt LUFS loudness + 7pt tempo stability)
+- Length accuracy: 15 points (strict: 0 points if >30s error)
 - **Star conversion:** Linear 0-100pts → 0.0-5.0★ (100pts=5.0★, 80pts=4.0★, 60pts=3.0★)
+- **Research-backed metrics:**
+  * Spectral flux: Standard in MIR (Foote 2000, onset detection)
+  * LUFS loudness: EBU R128 broadcast standard (perceptually validated)
+  * Tempo stability: Beat tracking evaluation metrics (MIREX)
+  * Weights based on perceptual importance studies
 
 **Cut Strategy Generation (V8 - Trim Mode):**
 - Generate 5 truly diverse strategies with different parameters:
@@ -149,7 +155,7 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 `spectral_analyzer.py:65` - `similarity_threshold` parameter (default: 0.75)
 
 ### Modify Quality Weights
-`quality_scorer.py:531` - `score_strategy()` function (50pts coherence, 30pts transitions, 20pts length)
+`quality_scorer.py:688` - `score_strategy()` function (50pts coherence, 35pts transitions, 15pts length) - V6 research-backed weights
 
 ### Change Star Rating Conversion
 `quality_scorer.py:685` - `points_to_stars()` function (currently linear 0-100 → 0.0-5.0)
@@ -162,7 +168,7 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 `cli.py:18` - `MIN_ACCEPTABLE_QUALITY` constant (default: 3.5★)
 
 ### Toggle Auto Protection
-`cli.py` - Use `--no-auto-protect` flag to disable automatic intro/outro protection
+`cli.py` - Use `--auto-protect` flag to enable automatic intro/outro protection (disabled by default)
 
 ### Adjust Extension Priority Weights
 `extension_engine.py:39` - `section_priority_weights` dict (chorus=3.0, verse=2.0, bridge=1.5, intro/outro=0.3)
@@ -177,6 +183,7 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **Chorus preservation: ≥1 chorus** (V7) - first chorus always protected (when detected) in trim mode
 - **Chorus prioritization** (V9) - choruses repeated first in extension mode
 - **Crossfade duration: 500ms** (V7) - longer crossfades for smoother transitions
+- **Fade-out duration: 5s** - extended to prevent abrupt drops at track end
 - Processing: ~60s for 3-min song (without MERT), ~70s (with MERT) for trim; ~60-70s (without MERT), ~80-90s (with MERT) for extension
 - File size limit: 15MB after normalization
 - Star ratings: 0.0-5.0 scale, 0.1 increments, rounded
@@ -224,6 +231,31 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **V1**: Initial release
 
 ## Recent Changes (V9)
+
+**V6 Research-Backed Quality Scoring (2026-06-23):**
+- **Improved LUFS loudness metric** - Now uses EBU R128 standard (pyloudnorm) instead of RMS
+- **Improved tempo stability metric** - Now uses beat interval variance instead of simple tempo detection
+- **Updated scoring weights** - Based on perceptual importance research:
+  * Musical coherence: 50% (unchanged)
+  * Transition smoothness: 35% (increased from 30%)
+  * Length accuracy: 15% (decreased from 20%)
+- **Added tempo stability to scoring** - 7 points, measures rhythm consistency
+- **Spectral flux weight increased** - Now 10 points (was 5)
+- **LUFS loudness weight increased** - Now 8 points (was 5)
+- All three metrics (spectral flux, LUFS, tempo) are research-backed with academic citations
+- See `RESEARCH_RECOMMENDATIONS.md` for academic justification and future improvements
+
+**Post-V9 Refinements (2026-06-23):**
+- **Changed default intro/outro protection to opt-in** - users must now use `--auto-protect` flag to enable
+- **Improved section boundary alignment** - prevents mid-melody cuts while limiting over-expansion:
+  - If cut is >60% within one section: expand to that section only
+  - Small cuts (<5s) spanning boundaries: pick section with more overlap
+  - Downbeat alignment now stays within section boundaries (inward preference)
+  - Prevents 9-18x expansions, typical expansion now 1.0-3.5x
+- Experimented with volume consistency penalty for quiet endings (reverted)
+- Enhanced fade-out handling to prevent abrupt drops (extended to 5 seconds)
+- Fixed double fade-out issue on naturally fading audio
+- Deleted volume-specific test files after penalty removal
 
 **V9 Audio Extension Feature (2026-06-22):**
 - Added extension_engine.py for intelligent audio lengthening

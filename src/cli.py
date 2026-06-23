@@ -164,7 +164,7 @@ def run_pipeline(
     regenerate_seed: Optional[int] = None,
     use_mert: bool = False,
     excluded_strategies: Optional[List[str]] = None,
-    auto_protect: bool = True,
+    auto_protect: bool = False,
     min_segment_duration: float = 10.0
 ) -> Dict:
     """
@@ -199,7 +199,7 @@ def run_pipeline(
         regenerate_seed: Optional seed for regeneration (None for first run)
         use_mert: Whether to use MERT embeddings for quality scoring (slower but better)
         excluded_strategies: List of strategy names to exclude (for regeneration)
-        auto_protect: Whether to automatically protect intro/outro (default: True)
+        auto_protect: Whether to automatically protect intro/outro (default: False)
 
     Returns:
         Dict with keys:
@@ -399,9 +399,9 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        '--no-auto-protect',
+        '--auto-protect',
         action='store_true',
-        help='Disable automatic intro/outro protection (allows cutting from start/end)'
+        help='Enable automatic intro/outro protection (prevents cutting from first/last 10%% or 15s)'
     )
 
     parser.add_argument(
@@ -465,7 +465,7 @@ def main():
     print(f"Input: {args.input}")
     print(f"Target length: {args.target}s")
     print(f"Protected regions: {args.protect if args.protect else 'None'}")
-    print(f"Auto-protect intro/outro: {'No' if args.no_auto_protect else 'Yes'}")
+    print(f"Auto-protect intro/outro: {'Yes' if args.auto_protect else 'No'}")
     print(f"Output directory: {args.output_dir}")
     print(f"MERT embeddings: {'Enabled' if args.use_mert else 'Disabled'}")
     print("=" * 60)
@@ -484,7 +484,7 @@ def main():
             regenerate_seed=None,
             use_mert=args.use_mert,
             excluded_strategies=None,
-            auto_protect=not args.no_auto_protect,
+            auto_protect=args.auto_protect,
             min_segment_duration=args.min_segment_duration
         )
 
@@ -516,7 +516,7 @@ def main():
                     regenerate_seed=regenerate_count,
                     use_mert=args.use_mert,
                     excluded_strategies=excluded_strategies,
-                    auto_protect=not args.no_auto_protect,
+                    auto_protect=args.auto_protect,
                     min_segment_duration=args.min_segment_duration
                 )
 

@@ -63,7 +63,12 @@ def align_to_section_boundaries(
     """
     Align cut points to section boundaries to avoid mid-section cuts.
 
-    Strategy: Expand cut to encompass whole sections that overlap significantly.
+    IMPROVED STRATEGY:
+    - If cut is mostly within ONE section (>60% overlap): expand to that section only
+    - If cut is small (<5s) and spans boundary: pick the section with more overlap
+    - If cut spans multiple sections significantly: align to nearest section boundaries
+    - This prevents over-expansion while ensuring cuts don't break melodies mid-flow
+    - Align to downbeats WITHIN section boundaries (prefer inward alignment)
 
     Args:
         cut_start: Proposed cut start time
@@ -78,27 +83,137 @@ def align_to_section_boundaries(
         # Fallback to downbeat alignment if no sections
         return align_to_downbeats(cut_start, cut_end, downbeats)
 
+    cut_duration = cut_end - cut_start
+
     # Find sections that overlap with the cut
     overlapping_sections = []
     for section in sections:
-        # Check if section overlaps with proposed cut
-        if not (section['end'] <= cut_start or section['start'] >= cut_end):
-            overlapping_sections.append(section)
+        # Calculate overlap
+        overlap_start = max(cut_start, section['start'])
+        overlap_end = min(cut_end, section['end'])
+        overlap = overlap_end - overlap_start
+
+        if overlap > 0:
+            overlapping_sections.append({
+                'section': section,
+                'overlap': overlap,
+                'overlap_ratio': overlap / cut_duration  # How much of cut is in this section
+            })
 
     if not overlapping_sections:
         # No overlap, use original cut points aligned to downbeats
         return align_to_downbeats(cut_start, cut_end, downbeats)
 
-    # Strategy: Expand to encompass all overlapping sections
-    # This ensures we cut whole verses/choruses, not partial ones
-    aligned_start = min(s['start'] for s in overlapping_sections)
-    aligned_end = max(s['end'] for s in overlapping_sections)
+    # Check if cut is mostly within ONE section (>60% overlap)
+    dominant_section = max(overlapping_sections, key=lambda x: x['overlap_ratio'])
 
-    # Fine-tune to nearest downbeats for clean cuts
-    aligned_start = find_nearest_downbeat(aligned_start, downbeats)
-    aligned_end = find_nearest_downbeat(aligned_end, downbeats)
+    if dominant_section['overlap_ratio'] > 0.6:
+        # Cut is mostly in one section - expand to encompass just that section
+        aligned_start = dominant_section['section']['start']
+        aligned_end = dominant_section['section']['end']
+
+        # Fine-tune to nearest downbeats, but stay within or at the section boundaries
+        # For start: prefer downbeat AT or AFTER section start (inward alignment)
+        aligned_start = find_downbeat_at_or_after(aligned_start, downbeats, aligned_end)
+        # For end: prefer downbeat AT or BEFORE section end (inward alignment)
+        aligned_end = find_downbeat_at_or_before(aligned_end, downbeats, aligned_start)
+
+    elif cut_duration < 5.0:
+        # Small cut spanning boundary - pick section with more overlap to minimize expansion
+        aligned_start = dominant_section['section']['start']
+        aligned_end = dominant_section['section']['end']
+
+        # Align to downbeats within section
+        aligned_start = find_downbeat_at_or_after(aligned_start, downbeats, aligned_end)
+        aligned_end = find_downbeat_at_or_before(aligned_end, downbeats, aligned_start)
+
+    else:
+        # Cut spans multiple sections significantly - align to nearest section boundaries
+        # This respects the original intent but ensures clean boundaries
+
+        # Find the section boundary closest to cut_start
+        all_boundaries = sorted(set([s['section']['start'] for s in overlapping_sections] +
+                                    [s['section']['end'] for s in overlapping_sections]))
+
+        # Align start to nearest boundary before or at cut_start
+        start_candidates = [b for b in all_boundaries if b <= cut_start + 0.5]
+        aligned_start = start_candidates[-1] if start_candidates else all_boundaries[0]
+
+        # Align end to nearest boundary after or at cut_end
+        end_candidates = [b for b in all_boundaries if b >= cut_end - 0.5]
+        aligned_end = end_candidates[0] if end_candidates else all_boundaries[-1]
+
+        # Align to downbeats
+        aligned_start = find_nearest_downbeat(aligned_start, downbeats)
+        aligned_end = find_nearest_downbeat(aligned_end, downbeats)
 
     return (aligned_start, aligned_end)
+
+
+def find_downbeat_at_or_after(
+    target_time: float,
+    downbeats: np.ndarray,
+    max_time: float,
+    tolerance: float = 2.0
+) -> float:
+    """
+    Find downbeat at or after target time (prefer inward alignment).
+
+    Args:
+        target_time: Target time in seconds (section start)
+        downbeats: Array of downbeat times
+        max_time: Maximum allowed time (section end)
+        tolerance: Maximum distance to search (default: 2.0s)
+
+    Returns:
+        Downbeat at or after target, or target itself if none found
+    """
+    if len(downbeats) == 0:
+        return target_time
+
+    # Find downbeats at or after target, within tolerance
+    valid_downbeats = downbeats[(downbeats >= target_time) &
+                                (downbeats <= min(target_time + tolerance, max_time))]
+
+    if len(valid_downbeats) == 0:
+        # No suitable downbeat, return target itself
+        return target_time
+
+    # Return first (earliest) downbeat
+    return valid_downbeats[0]
+
+
+def find_downbeat_at_or_before(
+    target_time: float,
+    downbeats: np.ndarray,
+    min_time: float,
+    tolerance: float = 2.0
+) -> float:
+    """
+    Find downbeat at or before target time (prefer inward alignment).
+
+    Args:
+        target_time: Target time in seconds (section end)
+        downbeats: Array of downbeat times
+        min_time: Minimum allowed time (section start)
+        tolerance: Maximum distance to search (default: 2.0s)
+
+    Returns:
+        Downbeat at or before target, or target itself if none found
+    """
+    if len(downbeats) == 0:
+        return target_time
+
+    # Find downbeats at or before target, within tolerance
+    valid_downbeats = downbeats[(downbeats <= target_time) &
+                                (downbeats >= max(target_time - tolerance, min_time))]
+
+    if len(valid_downbeats) == 0:
+        # No suitable downbeat, return target itself
+        return target_time
+
+    # Return last (latest) downbeat
+    return valid_downbeats[-1]
 
 
 def align_to_downbeats(
