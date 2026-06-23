@@ -8,7 +8,7 @@ Music Smart Trim intelligently trims or extends music to target length using spe
 
 ## Recent Version
 
-**Phase 2 (Current - 2026-06-23):** Unified architecture with Dynamic Programming optimization - globally optimal solutions using Viterbi algorithm. Single codebase for both trim and extend modes. Expected +0.2-0.4★ quality improvement. **Now integrated with --use-dp CLI flag.**
+**V6 (Current - 2026-06-23):** Research-backed quality scoring with LUFS loudness (EBU R128), tempo stability (beat interval variance), and updated weights (50/35/15). Expected +0.2-0.4★ quality improvement from perceptually-validated metrics.
 
 **V9 (2026-06-22):** Audio extension feature - intelligently lengthens audio by repeating sections. Supports both trim (target < original) and extend (target > original) modes with 5 diverse strategies each. Automatic mode detection based on target length. See `V9_EXTENSION_FEATURE.md` for details.
 
@@ -39,12 +39,6 @@ PYTHONPATH=. python src/cli.py --input song.mp3 --target 240
 # Run (with MERT embeddings for better quality - recommended)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert
 
-# Run (with DP optimizer for globally optimal solutions - Phase 2)
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-dp
-
-# Run (with both MERT and DP for maximum quality)
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert --use-dp
-
 # Run (extension with MERT)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 240 --use-mert
 
@@ -66,15 +60,12 @@ rm -rf output* __pycache__ .pytest_cache
 
 **Note:** Mode (trim vs extend) is automatically detected based on target length. CLI includes interactive regeneration loop - after generating top 3 options (from 5 candidates), prompts "Generate alternative options? (y/n)" to try different strategies with exclusion of previously shown options.
 
-## Architecture (7-Stage Pipeline, 12 Modules)
+## Architecture (7-Stage Pipeline, 9 Modules)
 
 ```
 Audio → audio_loader → spectral_analyzer → structure_analyzer
-  → segment_matcher → [trim_engine | extension_engine | unified_generator*] 
+  → segment_matcher → [trim_engine | extension_engine] 
   → quality_scorer → output_generator → CLI
-  
-* unified_generator (Phase 2): DP optimization for globally optimal solutions
-  Uses edit_operations + edit_graph modules
 ```
 
 **Core Modules:**
@@ -82,16 +73,11 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - `spectral_analyzer`: Detect repetitions (SSM, min 15s, threshold 0.75)
 - `structure_analyzer`: Detect beats, tempo, label sections with repetition counts
 - `segment_matcher`: Cluster and filter segments
-- `trim_engine`: Generate 5 diverse trim strategies, select top 3 by quality (greedy)
-- `extension_engine`: Generate 5 diverse extension strategies, select top 3 by quality (greedy)
-- `quality_scorer`: Enhanced heuristics + optional MERT embeddings (V6 research-backed)
+- `trim_engine`: Generate 5 diverse trim strategies, select top 3 by quality
+- `extension_engine`: Generate 5 diverse extension strategies, select top 3 by quality
+- `quality_scorer`: V6 research-backed metrics (LUFS, tempo stability, spectral flux)
 - `crossfade`: Constant-power crossfades (500ms)
 - `output_generator`: Render with crossfades, save files
-
-**Phase 2 Modules (NEW):**
-- `edit_operations`: Unified data model (EditOperation, Segment, EditSequence)
-- `edit_graph`: DP optimizer using Viterbi algorithm for globally optimal paths
-- `unified_generator`: Unified API for both trim and extend with DP optimization
 
 ## Key Features (V9)
 
@@ -247,16 +233,6 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **V1**: Initial release
 
 ## Recent Changes (V9)
-
-**Phase 2 Unified Architecture (2026-06-23):**
-- **Dynamic Programming optimizer** - Viterbi algorithm for globally optimal solutions
-- **Unified data model** - Single EditOperation model for trim and extend
-- **EditGraph with DP** - O(n²) complexity, tractable for music editing
-- **Expected improvement:** +0.2-0.4★ from globally optimal vs greedy
-- **Research backing:** Viterbi algorithm used in speech recognition, sequence alignment
-- **Status:** ✅ INTEGRATED - Use `--use-dp` flag to enable
-- **CLI usage:** `--use-dp` enables DP optimizer
-- See `PHASE2_STATUS.md` and `FINAL_SUMMARY.md` for details
 
 **V6 Research-Backed Quality Scoring (2026-06-23):**
 - **Improved LUFS loudness metric** - Now uses EBU R128 standard (pyloudnorm) instead of RMS
