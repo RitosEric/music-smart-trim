@@ -18,7 +18,7 @@ NEXT STEPS:
    Ready for public release"
 
 2. Add remote and push:
-   git remote add origin https://github.com/YOUR_USERNAME/music-smart-trim.git
+   git remote add origin https://github.com/RitosEric/music-smart-trim.git
    git push -u origin main
 
 3. Done! Your repository is public.

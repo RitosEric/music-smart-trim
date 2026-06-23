@@ -45,3 +45,13 @@ tests/fixtures/*.flac
 
 # Logs
 *.log
+
+# Claude Code specific files
+.claude/
+.superpowers/
+docs/superpowers/
+PUBLISH_INSTRUCTIONS.txt
+
+# Archive directories
+archive/
+docs/archive/
