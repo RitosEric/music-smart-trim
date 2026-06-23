@@ -165,7 +165,8 @@ def run_pipeline(
     use_mert: bool = False,
     excluded_strategies: Optional[List[str]] = None,
     auto_protect: bool = False,
-    min_segment_duration: float = 10.0
+    min_segment_duration: float = 10.0,
+    use_dp: bool = False  # NEW: DP optimizer flag
 ) -> Dict:
     """
     Run complete pipeline from audio loading to output generation.
@@ -265,7 +266,8 @@ def run_pipeline(
         downbeats=structure['beat_info']['downbeats'],
         regenerate_seed=regenerate_seed,
         num_strategies=5,
-        min_segment_duration=min_segment_duration
+        min_segment_duration=min_segment_duration,
+        use_dp_optimizer=use_dp  # NEW: Pass DP flag
     )
     print(f"Generated {len(all_strategies)} strategies")
 
@@ -405,6 +407,12 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        '--use-dp',
+        action='store_true',
+        help='Use Dynamic Programming optimizer for globally optimal solutions (Phase 2, research-backed)'
+    )
+
+    parser.add_argument(
         '--min-segment-duration',
         type=float,
         default=10.0,
@@ -485,7 +493,8 @@ def main():
             use_mert=args.use_mert,
             excluded_strategies=None,
             auto_protect=args.auto_protect,
-            min_segment_duration=args.min_segment_duration
+            min_segment_duration=args.min_segment_duration,
+            use_dp=args.use_dp  # NEW: Pass DP flag
         )
 
         # Display results
@@ -517,7 +526,8 @@ def main():
                     use_mert=args.use_mert,
                     excluded_strategies=excluded_strategies,
                     auto_protect=args.auto_protect,
-                    min_segment_duration=args.min_segment_duration
+                    min_segment_duration=args.min_segment_duration,
+                    use_dp=args.use_dp  # NEW: Pass DP flag
                 )
 
                 display_results(result)

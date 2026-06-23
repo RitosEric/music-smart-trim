@@ -763,7 +763,8 @@ def generate_strategies(
     downbeats: Optional[np.ndarray] = None,
     regenerate_seed: int = None,
     num_strategies: int = 5,
-    min_segment_duration: float = 10.0
+    min_segment_duration: float = 10.0,
+    use_dp_optimizer: bool = False  # NEW: Enable DP optimization
 ) -> List[TrimStrategy]:
     """
     Unified interface for generating trim or extension strategies.
@@ -780,6 +781,7 @@ def generate_strategies(
         regenerate_seed: Optional seed for reproducible randomization
         num_strategies: Number of strategies to generate (default: 5)
         min_segment_duration: Minimum segment duration in seconds (default: 10.0, only used for extension mode)
+        use_dp_optimizer: Use Dynamic Programming for globally optimal solutions (Phase 2)
 
     Returns:
         List of TrimStrategy objects
@@ -787,6 +789,26 @@ def generate_strategies(
     Raises:
         ValueError: If mode is not "trim" or "extend"
     """
+    # NEW: Use DP optimizer if requested (Phase 2 feature)
+    if use_dp_optimizer:
+        try:
+            from src.unified_generator import generate_strategies_unified
+            print("🔬 Using DP optimizer for globally optimal solutions...")
+            return generate_strategies_unified(
+                mode=mode,
+                clusters=clusters,
+                original_length=original_length,
+                target_length=target_length,
+                sections=sections,
+                downbeats=downbeats,
+                num_strategies=num_strategies
+            )
+        except Exception as e:
+            print(f"⚠️  DP optimizer failed: {e}")
+            print("📊 Falling back to greedy approach...")
+            # Fall through to greedy approach
+
+    # Original greedy approach (default, well-tested)
     if mode == "trim":
         return generate_trim_strategies(
             clusters=clusters,
