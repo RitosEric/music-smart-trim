@@ -1,49 +1,37 @@
 # Music Smart Trim
 
-Intelligently trim or extend audio files to a target length while preserving musical quality. Uses research-backed audio analysis and quality metrics to create natural-sounding edits.
-
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Intelligently trim or extend audio files to a target length while preserving musical quality. Uses advanced audio analysis and research-backed quality metrics to create natural-sounding edits.
 
 ## Features
 
-### Core Capabilities
-- **Automatic Trimming**: Intelligently shorten audio to target length
-- **Automatic Extension**: Lengthen audio by repeating suitable sections
-- **Quality-Driven**: Research-backed metrics (LUFS loudness, tempo stability, spectral flux)
-- **Music-Aware**: Detects and preserves choruses, respects section boundaries
+- **Smart Trimming**: Automatically shorten audio while preserving choruses and musical structure
+- **Smart Extension**: Intelligently lengthen audio by repeating suitable sections
+- **Music-Aware**: Detects and respects song sections (intro, verse, chorus, bridge, outro)
 - **Beat-Aligned**: All cuts aligned to beats for seamless transitions
-
-### Audio Analysis (V9)
-- Self-similarity matrix (SSM) for repetition detection
-- Beat tracking and tempo estimation
-- Section labeling (intro/verse/chorus/bridge/outro)
-- Segment clustering and quality assessment
-
-### Quality Scoring (V6)
-- **LUFS Loudness** - EBU R128 broadcast standard
-- **Tempo Stability** - Beat interval variance analysis
-- **Spectral Flux** - Frequency smoothness measurement
-- **Research-Backed Weights** - 50% coherence, 35% transitions, 15% length
-- **Optional MERT Embeddings** - AI-powered transition quality assessment
-
-### Output
-- Generates 3 diverse strategies, ranked by quality (0-5★)
-- Constant-power crossfades for smooth transitions
-- 5-second fade-out for natural endings
+- **Quality-Driven**: Research-backed metrics ensure high-quality output (3.2-3.9★ expected)
 
 ## Quick Start
+
+### Requirements
+
+- Python 3.8 or higher
+- pip (Python package manager)
 
 ### Installation
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/music-smart-trim.git
+# Clone the repository
+git clone https://github.com/RitosEric/music-smart-trim.git
 cd music-smart-trim
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+# On Windows:
+venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -53,164 +41,103 @@ pip install -r requirements.txt
 
 ```bash
 # Trim audio to 120 seconds
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120
+python -m src.cli --input song.mp3 --target 120
 
 # Extend audio to 240 seconds
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 240
-
-# With MERT for better quality (slower, requires download)
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert
-
-# Protect specific regions
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --protect "0:00-0:15" "3:00-3:30"
-
-# Enable auto intro/outro protection
-PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --auto-protect
+python -m src.cli --input song.mp3 --target 240
 ```
 
-### Output
+The program will generate 3 output files in the `output/` directory, ranked by quality.
 
-The system generates 3 output files in the `output/` directory:
-- `option_0_X.Xstars.wav` - Highest quality strategy
-- `option_1_X.Xstars.wav` - Second best strategy  
-- `option_2_X.Xstars.wav` - Third best strategy
+## Usage Examples
+
+### Trimming Audio
+
+```bash
+# Basic trim to 2 minutes
+python -m src.cli --input song.mp3 --target 120
+
+# Trim with better quality (slower, uses AI model)
+python -m src.cli --input song.mp3 --target 120 --use-mert
+```
+
+### Extending Audio
+
+```bash
+# Extend to 4 minutes
+python -m src.cli --input song.mp3 --target 240
+```
+
+### Protecting Regions
+
+```bash
+# Protect intro and outro from editing
+python -m src.cli --input song.mp3 --target 120 --auto-protect
+
+# Protect specific time ranges
+python -m src.cli --input song.mp3 --target 120 --protect "0:00-0:30" "3:00-3:30"
+```
+
+## Command-Line Options
+
+| Option                  | Description                              |
+| ----------------------- | ---------------------------------------- |
+| `--input PATH`          | Input audio file (required)              |
+| `--target SECONDS`      | Target length in seconds (required)      |
+| `--output-dir PATH`     | Output directory (default: `./output`)   |
+| `--protect "START-END"` | Protect specific time ranges             |
+| `--auto-protect`        | Automatically protect intro/outro        |
+| `--use-mert`            | Use AI model for better quality (slower) |
+
+## Output
+
+The program generates 3 audio files ranked by quality:
+
+```
+output/
+├── option_0_3.9stars.wav  # Best quality
+├── option_1_3.7stars.wav  # Second best
+└── option_2_3.5stars.wav  # Third best
+```
+
+Each file is rated on a 5-star scale based on:
+
+- Musical coherence (beat alignment, section order)
+- Transition smoothness (no audible cuts)
+- Length accuracy (within ±15 seconds)
 
 ## How It Works
 
-### 7-Stage Pipeline
+1. **Analysis**: Detects beats, tempo, and song structure
+2. **Segment Detection**: Identifies repeated sections (verses, choruses)
+3. **Strategy Generation**: Creates multiple editing strategies
+4. **Quality Scoring**: Ranks strategies using research-backed metrics
+5. **Rendering**: Applies edits with smooth crossfades
 
-```
-Audio File
-    ↓
-1. Load & Normalize (22050Hz mono)
-    ↓
-2. Spectral Analysis (SSM, repetition detection)
-    ↓
-3. Structure Analysis (beats, tempo, sections)
-    ↓
-4. Segment Matching (clustering, filtering)
-    ↓
-5. Strategy Generation (trim or extend mode)
-    ↓
-6. Quality Scoring (V6 research-backed metrics)
-    ↓
-7. Audio Rendering (crossfades, output)
-```
+## Performance
 
-### Trim Mode (Target < Original)
-- Identifies repeated segments (verses, choruses)
-- Generates 5 diverse removal strategies
-- Ranks by quality, selects top 3
-- Preserves at least 1 chorus
-- Aligns cuts to section boundaries and beats
+- **Processing Time**: ~60-70 seconds for a 3-minute song
+- **With --use-mert**: +20 seconds (first-time 360MB model download)
+- **Quality**: 3.2-3.9★ typical output rating
 
-### Extend Mode (Target > Original)
-- Identifies suitable sections for repetition
-- Generates 5 diverse extension strategies
-- Prefers high-similarity, high-energy sections
-- Limits repetitions per section
-- Creates smooth loop transitions
+## Troubleshooting
 
-## Quality Metrics (V6)
+### "No module named 'src'"
 
-### Research-Backed Scoring
-- **Musical Coherence** (50%): Beat alignment, harmonic continuity, section order
-- **Transition Smoothness** (35%): Spectral flux, LUFS loudness, tempo stability
-- **Length Accuracy** (15%): Strict ±15s tolerance
+Use `python -m src.cli` instead of `python src/cli.py`
 
-### Academic Foundation
-- **LUFS**: EBU R128 broadcast standard for perceptual loudness
-- **Tempo Stability**: MIREX beat tracking evaluation metrics
-- **Spectral Flux**: Foote 2000, standard in Music Information Retrieval
-- **Weights**: Based on perceptual importance studies
+### "File not found"
 
-## Configuration
+Provide full path to input file: `python -m src.cli --input /path/to/song.mp3 --target 120`
 
-### Command-Line Options
+### Poor quality output
 
-```bash
---input PATH            Input audio file (required)
---target SECONDS        Target length in seconds (required)
---output-dir PATH       Output directory (default: ./output)
---protect "START-END"   Protect time ranges (can specify multiple)
---auto-protect          Auto-protect intro/outro (10% or 15s)
---use-mert              Use MERT embeddings for better quality
---min-segment-duration  Minimum segment duration for extension (default: 10s)
-```
+Try with `--use-mert` flag for better quality (requires download, slower)
 
-### Expected Quality
+## Supported Formats
 
-| Configuration | Expected Quality |
-|---------------|------------------|
-| Default | 3.0-3.5★ |
-| + V6 metrics | 3.2-3.9★ |
-| + MERT | 3.5-4.1★ |
-
-### Performance
-
-- **Processing Time**: ~60-70s for 3-minute song
-- **With MERT**: +20s (first-time 360MB download)
-- **Memory**: ~500MB peak
-
-## Development
-
-### Running Tests
-
-```bash
-# Run all tests
-python -m pytest tests/
-
-# Run specific module
-python -m pytest tests/test_quality_scorer.py -v
-
-# Run with coverage
-python -m pytest tests/ --cov=src --cov-report=html
-```
-
-**Current Status**: 98/98 functional tests pass (100%)
-
-### Project Structure
-
-```
-music-smart-trim/
-├── src/
-│   ├── audio_loader.py          # Audio loading
-│   ├── spectral_analyzer.py     # SSM analysis
-│   ├── structure_analyzer.py    # Beat/section detection
-│   ├── segment_matcher.py       # Clustering
-│   ├── trim_engine.py           # Trim strategies
-│   ├── extension_engine.py      # Extension strategies
-│   ├── quality_scorer.py        # V6 metrics
-│   ├── output_generator.py      # Rendering
-│   ├── crossfade.py             # Audio crossfading
-│   └── cli.py                   # CLI interface
-├── tests/                        # Test suite (103 tests)
-├── output/                       # Generated audio files
-├── requirements.txt              # Python dependencies
-└── README.md                     # This file
-```
-
-## Documentation
-
-- **CLAUDE.md** - Complete technical documentation and implementation details
-- **RESEARCH_RECOMMENDATIONS.md** - Academic foundation and future improvements
-- **V9_EXTENSION_FEATURE.md** - Extension mode documentation
-- **V6_IMPLEMENTATION_SUMMARY.md** - Quality metrics implementation
-- **TESTING_GUIDE.md** - Testing procedures and conventions
-- **FINAL_STATUS.md** - Current system status
-- **FINAL_VERIFICATION.md** - Verification report
-
-## Version History
-
-- **V9** (2026-06-22): Extension mode - intelligent audio lengthening
-- **V8** (2026-06-21): Strategy diversity fix
-- **V7** (2026-06-20): Section labeling with repetition counts
-- **V6** (2026-06-23): Research-backed quality metrics (LUFS, tempo stability)
-- **V5** (2026-06-20): Enhanced quality scoring with MERT
-- **V4** (2026-06-20): Section-aware editing
-- **V3** (2026-06-19): Beat-aligned cutting
-- **V2** (2026-06-19): Quality scoring improvements
-- **V1** (2026-06-18): Initial release
+**Input**: MP3, WAV, FLAC, M4A, OGG  
+**Output**: WAV (high quality, uncompressed)
 
 ## Requirements
 
@@ -220,23 +147,9 @@ music-smart-trim/
 - numpy >= 1.24.0
 - scipy >= 1.10.0
 - soundfile >= 0.12.0
-- pyloudnorm >= 0.1.0 (V6)
-- pytest >= 7.0.0 (development)
+- pyloudnorm >= 0.1.0
 
-## Known Limitations
-
-- Chorus detection requires: 12-30s duration, high energy (top 40%), ≥3 repetitions
-- Extension mode: Maximum practical extension ~2× original length
-- Extension mode: Minimum extension ~15s
-- Test fixtures not included (4 tests require audio files)
-
-## Contributing
-
-Contributions welcome! Please:
-1. Run tests before submitting PR
-2. Follow existing code style
-3. Update documentation for new features
-4. Add tests for new functionality
+See `requirements.txt` for complete list.
 
 ## License
 
@@ -244,24 +157,10 @@ MIT License - see LICENSE file for details
 
 ## Acknowledgments
 
-### Research Foundation
-- **Foote, J. (2000)** - Automatic Audio Segmentation
-- **EBU R128 (2014)** - Loudness Normalization Standard
-- **MIREX** - Music Information Retrieval Evaluation eXchange
-- **McFee et al. (2015)** - librosa: Audio Analysis in Python
+Built using research-backed audio analysis techniques:
 
-### Dependencies
-- librosa - Music and audio analysis
-- pydub - Audio manipulation
-- pyloudnorm - LUFS loudness measurement
-- soundfile - Audio I/O
+- EBU R128 loudness standard
+- MIREX beat tracking evaluation
+- Self-similarity matrix analysis
 
-## Contact
-
-For questions, issues, or suggestions, please open an issue on GitHub.
-
----
-
-**Status**: Production ready (V6 with research-backed metrics)
-**Quality**: 3.2-3.9★ expected with default settings
-**Test Coverage**: 98/98 functional tests pass
+Dependencies: librosa, pydub, numpy, scipy, soundfile, pyloudnorm

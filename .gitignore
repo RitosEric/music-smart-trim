@@ -7,6 +7,9 @@ __pycache__/
 venv/
 env/
 ENV/
+build/
+dist/
+*.egg-info/
 
 # Testing
 .pytest_cache/
@@ -24,9 +27,21 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Output
+# Audio files (keep output directory structure)
 output/*.wav
 output/*.mp3
+output/*.flac
+output/*.m4a
+output/summary.json
+output/summary.txt
 
-# Keep output directory but not files
+# Keep the output directory itself
 !output/.gitkeep
+
+# Test fixtures
+tests/fixtures/*.wav
+tests/fixtures/*.mp3
+tests/fixtures/*.flac
+
+# Logs
+*.log
