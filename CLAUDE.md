@@ -8,7 +8,7 @@ Music Smart Trim intelligently trims or extends music to target length using spe
 
 ## Recent Version
 
-**Phase 2 (Current - 2026-06-23):** Unified architecture with Dynamic Programming optimization - globally optimal solutions using Viterbi algorithm. Single codebase for both trim and extend modes. Expected +0.2-0.4★ quality improvement.
+**Phase 2 (Current - 2026-06-23):** Unified architecture with Dynamic Programming optimization - globally optimal solutions using Viterbi algorithm. Single codebase for both trim and extend modes. Expected +0.2-0.4★ quality improvement. **Now integrated with --use-dp CLI flag.**
 
 **V9 (2026-06-22):** Audio extension feature - intelligently lengthens audio by repeating sections. Supports both trim (target < original) and extend (target > original) modes with 5 diverse strategies each. Automatic mode detection based on target length. See `V9_EXTENSION_FEATURE.md` for details.
 
@@ -38,6 +38,12 @@ PYTHONPATH=. python src/cli.py --input song.mp3 --target 240
 
 # Run (with MERT embeddings for better quality - recommended)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert
+
+# Run (with DP optimizer for globally optimal solutions - Phase 2)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-dp
+
+# Run (with both MERT and DP for maximum quality)
+PYTHONPATH=. python src/cli.py --input song.mp3 --target 120 --use-mert --use-dp
 
 # Run (extension with MERT)
 PYTHONPATH=. python src/cli.py --input song.mp3 --target 240 --use-mert
@@ -248,8 +254,9 @@ Audio → audio_loader → spectral_analyzer → structure_analyzer
 - **EditGraph with DP** - O(n²) complexity, tractable for music editing
 - **Expected improvement:** +0.2-0.4★ from globally optimal vs greedy
 - **Research backing:** Viterbi algorithm used in speech recognition, sequence alignment
-- Status: Core implementation complete (761 lines), ready for integration
-- See `PHASE2_STATUS.md` for details
+- **Status:** ✅ INTEGRATED - Use `--use-dp` flag to enable
+- **CLI usage:** `--use-dp` enables DP optimizer
+- See `PHASE2_STATUS.md` and `FINAL_SUMMARY.md` for details
 
 **V6 Research-Backed Quality Scoring (2026-06-23):**
 - **Improved LUFS loudness metric** - Now uses EBU R128 standard (pyloudnorm) instead of RMS
