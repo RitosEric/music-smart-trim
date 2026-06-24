@@ -1,4 +1,4 @@
-# Python
+# ---- Python ----
 __pycache__/
 *.py[cod]
 *$py.class
@@ -11,61 +11,52 @@ build/
 dist/
 *.egg-info/
 
-# Testing
+# ---- Node / frontend ----
+node_modules/
+frontend/build/
+frontend/.env.local
+npm-debug.log*
+yarn-error.log*
+
+# ---- Tests (kept local only, not part of the demo repo) ----
+tests/
+conftest.py
+pyproject.toml
+**/*.test.js
+**/*.test.jsx
 .pytest_cache/
 .coverage
 htmlcov/
 
-# IDE
+# ---- Runtime data ----
+# CLI output (keep the directory, ignore its contents)
+output/*
+!output/.gitkeep
+# Web job storage (uploads + rendered results)
+api/storage/
+api/storage_data/
+# Stray nested tree if the server is started from inside api/
+api/api/
+
+# ---- Local assets ----
+# Example audio corpus (large; test inputs, not source)
+examples/
+
+# ---- Editor / OS ----
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Audio files (keep output directory structure)
-output/*.wav
-output/*.mp3
-output/*.flac
-output/*.m4a
-output/summary.json
-output/summary.txt
-
-# Keep the output directory itself
-!output/.gitkeep
-
-# Test fixtures
-tests/fixtures/*.wav
-tests/fixtures/*.mp3
-tests/fixtures/*.flac
-
-# Logs
 *.log
-
-# API storage (uploaded/processed files)
-api/storage/
-api/storage_data/
-# Stray nested tree created when the server is started from inside api/
-# (Path("api/storage_data") resolves relative to cwd; see CLAUDE.md gotcha).
-api/api/
-api/__pycache__/
-*.pyc
 .env
 
-# Claude Code specific files
+# ---- Agent / tooling ----
 CLAUDE.md
 .claude/
 .superpowers/
 docs/superpowers/
-PUBLISH_INSTRUCTIONS.txt
-
-# Archive directories
 archive/
 docs/archive/
-
-# Local example audio corpus (large; used as test inputs, not source)
-examples/

@@ -17,7 +17,6 @@ from src.section_planner import plan_extensions, snap_to_downbeat
 
 
 def generate_extension_strategies(
-    clusters: List[Dict],
     original_length: float,
     target_length: float,
     sections: Optional[List[Dict]] = None,
@@ -38,8 +37,6 @@ def generate_extension_strategies(
 
     ``protected_regions`` keeps the planner from repeating a protected section.
     ``max_repeats`` is raised by strict-length escalation to reach tight targets.
-    ``clusters`` is accepted for signature compatibility; section structure now
-    drives the decision.
     """
     if sections:
         plans = plan_extensions(

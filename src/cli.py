@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Callable
 
 from src.audio_loader import load_audio, AudioLoadError
-from src.spectral_analyzer import analyze_audio_structure
-from src.segment_matcher import match_segments
+from src.spectral_analyzer import extract_chroma_features
+from src.segment_matcher import parse_protected_regions, merge_overlapping_regions
 from src.trim_engine import generate_trim_strategies, generate_strategies
 from src.quality_scorer import score_strategy
 from src.output_generator import generate_outputs
@@ -78,7 +78,6 @@ def get_all_protected_regions(
 
 def retry_for_quality(
     scored_strategies: List[Dict],
-    clusters: List[Dict],
     original_length: float,
     target_length: float,
     structure: Dict,
@@ -96,7 +95,6 @@ def retry_for_quality(
 
     Args:
         scored_strategies: Initial scored strategies
-        clusters: Segment clusters
         original_length: Original audio length
         target_length: Target length
         structure: Music structure
@@ -143,7 +141,6 @@ def retry_for_quality(
 
             all_strategies = generate_strategies(
                 mode=mode,
-                clusters=clusters,
                 original_length=original_length,
                 target_length=target_length,
                 sections=structure['sections'],
@@ -215,7 +212,6 @@ def _select_closest(
 
 def retry_for_strict_length(
     scored_strategies: List[Dict],
-    clusters: List[Dict],
     original_length: float,
     target_length: float,
     structure: Dict,
@@ -287,7 +283,6 @@ def retry_for_strict_length(
 
         retry_strategies = generate_strategies(
             mode=mode,
-            clusters=clusters,
             original_length=original_length,
             target_length=target_length,
             sections=structure['sections'],
@@ -399,35 +394,25 @@ def run_pipeline(
     original_length = len(audio_data) / sample_rate
     print(f"Audio loaded: {original_length:.2f}s @ {sample_rate}Hz")
 
-    # Stage 2: Analyze audio structure (including beats and sections)
+    # Stage 2: Analyze audio structure (chroma -> beats, boundaries, sections)
     print("Analyzing audio structure...")
     from src.structure_analyzer import analyze_structure, get_protected_intro_outro
 
-    analysis_result = analyze_audio_structure(audio_data, sample_rate)
-    repeated_segments = analysis_result['repeated_segments']
-    chroma = analysis_result['chroma']
+    chroma = extract_chroma_features(audio_data, sample_rate)
+    structure = analyze_structure(audio_data, sample_rate, chroma)
 
-    # Detect music structure (intro, verse, chorus, outro) and beats
-    # V2: Pass repeated_segments for better chorus detection
-    structure = analyze_structure(audio_data, sample_rate, chroma, repeated_segments)
-
-    print(f"Found {len(repeated_segments)} repeated segments")
     print(f"Detected tempo: {structure['beat_info']['tempo']:.1f} BPM")
     print(f"Detected {len(structure['sections'])} sections:")
     for section in structure['sections']:
         print(f"  {section['start']:.1f}s - {section['end']:.1f}s: {section['label']}")
 
-    # Get all protected regions (user-specified + optional auto intro/outro)
+    # Stage 3: Resolve protected regions (user-specified + optional auto intro/outro)
     all_protected_regions = get_all_protected_regions(
         protected_regions, auto_protect, structure, audio_data, sample_rate, original_length
     )
-
-    # Stage 3: Match segments
-    print("Matching segments and filtering protected regions...")
-    match_result = match_segments(repeated_segments, all_protected_regions)
-    clusters = match_result['clusters']
-    protected_regions_parsed = match_result['protected_regions']
-    print(f"Identified {len(clusters)} segment clusters")
+    protected_regions_parsed = merge_overlapping_regions(
+        parse_protected_regions(all_protected_regions)
+    )
     print(f"Protected regions: {len(protected_regions_parsed)}")
 
     # Stage 4: Detect mode and generate strategies
@@ -439,7 +424,6 @@ def run_pipeline(
     print(f"Generating 5 diverse {mode} strategies...")
     all_strategies = generate_strategies(
         mode=mode,
-        clusters=clusters,
         original_length=original_length,
         target_length=target_length,
         sections=structure['sections'],
@@ -452,7 +436,7 @@ def run_pipeline(
     )
     print(f"Generated {len(all_strategies)} strategies")
 
-    # DEBUG: Show strategy details
+    # Show what each candidate strategy does.
     print(f"\nStrategy details:")
     for strategy in all_strategies:
         if mode == "trim" and strategy.cut_points:
@@ -500,14 +484,14 @@ def run_pipeline(
     # ignores length; strict ignores quality past tolerance).
     if strict_length:
         strategies, scores, strict_length_met = retry_for_strict_length(
-            scored_strategies, clusters, original_length, target_length,
+            scored_strategies, original_length, target_length,
             structure, audio_data, sample_rate, regenerate_seed, mode,
             min_segment_duration, protected_regions=protected_regions_parsed,
             protect_ends=auto_protect, progress_callback=progress_callback,
         )
     else:
         strategies, scores = retry_for_quality(
-            scored_strategies, clusters, original_length, target_length,
+            scored_strategies, original_length, target_length,
             structure, audio_data, sample_rate, regenerate_seed, mode,
             min_segment_duration, protected_regions=protected_regions_parsed,
             protect_ends=auto_protect, progress_callback=progress_callback,

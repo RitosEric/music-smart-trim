@@ -159,8 +159,8 @@ function ControlPanel({
             <p className="text-xs text-gray-500 mt-1">
               Force the output to stay within 15 seconds of your target. Cuts
               may sound rougher because length is prioritized over musical
-              quality. If no compliant option can be found after 5 retries, the
-              closest options will be shown with a warning.
+              quality. If no option fits after several refinement passes, the
+              closest results are shown with a warning.
             </p>
           </div>
           <label className="relative inline-flex items-center cursor-pointer">

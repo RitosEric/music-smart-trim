@@ -182,7 +182,7 @@ function ResultsDisplay({
             Strict length couldn't be met
           </p>
           <p className="text-sm text-amber-800 mt-1">
-            We retried with five different seeds but no strategy landed within
+            We tried progressively more aggressive edits but none landed within
             15 seconds of your target. Showing the closest options we found
             instead — their durations may be more than 15s off target.
           </p>

@@ -47,7 +47,6 @@ class TrimStrategy:
 
 
 def generate_trim_strategies(
-    clusters: List[Dict],
     original_length: float,
     target_length: float,
     sections: Optional[List[Dict]] = None,
@@ -72,9 +71,6 @@ def generate_trim_strategies(
     When no section data is available (structure detection failed), falls back
     to a single centered cut of the required duration so the pipeline still
     produces output.
-
-    ``clusters`` is accepted for signature compatibility with the previous
-    engine and the router; section structure now drives the decision.
     """
     if sections:
         plans = plan_trims(
@@ -120,7 +116,6 @@ def _fallback_trim(
 
 def generate_strategies(
     mode: str,
-    clusters: List[Dict],
     original_length: float,
     target_length: float,
     sections: Optional[List[Dict]] = None,
@@ -145,7 +140,6 @@ def generate_strategies(
     """
     if mode == "trim":
         return generate_trim_strategies(
-            clusters=clusters,
             original_length=original_length,
             target_length=target_length,
             sections=sections,
@@ -159,7 +153,6 @@ def generate_strategies(
     elif mode == "extend":
         from src.extension_engine import generate_extension_strategies
         return generate_extension_strategies(
-            clusters=clusters,
             original_length=original_length,
             target_length=target_length,
             sections=sections,

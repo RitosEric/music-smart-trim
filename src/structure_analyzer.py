@@ -83,24 +83,6 @@ def detect_beats_and_bars(audio_data: np.ndarray, sr: int, time_signature: int =
     }
 
 
-def find_nearest_downbeat(target_time: float, downbeats: np.ndarray) -> float:
-    """
-    Find the nearest downbeat to a target time for clean cuts.
-
-    Args:
-        target_time: Target time in seconds
-        downbeats: Array of downbeat times
-
-    Returns:
-        Nearest downbeat time
-    """
-    if len(downbeats) == 0:
-        return target_time
-
-    idx = np.argmin(np.abs(downbeats - target_time))
-    return downbeats[idx]
-
-
 def detect_structure_boundaries(audio_data: np.ndarray, sr: int) -> np.ndarray:
     """
     Detect structural boundaries using spectral novelty.
@@ -166,22 +148,19 @@ def label_sections(
     sr: int,
     boundaries: np.ndarray,
     chroma: np.ndarray,
-    repeated_segments: List[Dict] = None
 ) -> List[Dict]:
     """
-    Label sections as intro/verse/chorus/bridge/outro using multiple features.
+    Label sections as intro/verse/chorus/bridge/outro from energy + repetition.
 
-    IMPROVED VERSION V2: Integrates spectral analyzer's repeated segments
-    - Chorus: Overlaps with many repeated segments + high energy + 12-30s
-    - Verse: Overlaps with some repeated segments + medium energy + 25-60s
-    - Bridge: Few/no overlaps + varies
+    A chorus is a repeated, high-energy section; a verse repeats but isn't the
+    loud hook; a bridge is a one-off. Repetition is measured by chroma
+    similarity between sections (see count_section_repetitions).
 
     Args:
         audio_data: Audio signal
         sr: Sample rate
         boundaries: Section boundary times
         chroma: Chroma features for the entire audio
-        repeated_segments: List of repeated segment dicts from spectral_analyzer
 
     Returns:
         List of section dicts with start, end, label, repetition_count, energy
@@ -273,40 +252,7 @@ def label_sections(
     return sections
 
 
-def compute_chroma_similarity(chroma1: np.ndarray, chroma2: np.ndarray) -> float:
-    """
-    Compute similarity between two chroma segments.
-
-    Args:
-        chroma1: First chroma segment
-        chroma2: Second chroma segment
-
-    Returns:
-        Similarity score (0-1)
-    """
-    # Normalize to same length for comparison
-    min_len = min(chroma1.shape[1], chroma2.shape[1])
-    if min_len == 0:
-        return 0.0
-
-    c1 = chroma1[:, :min_len]
-    c2 = chroma2[:, :min_len]
-
-    # Flatten and compute cosine similarity
-    c1_flat = c1.flatten()
-    c2_flat = c2.flatten()
-
-    norm1 = np.linalg.norm(c1_flat)
-    norm2 = np.linalg.norm(c2_flat)
-
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-
-    similarity = np.dot(c1_flat, c2_flat) / (norm1 * norm2)
-    return max(0.0, similarity)  # Ensure non-negative
-
-
-def analyze_structure(audio_data: np.ndarray, sr: int, chroma: np.ndarray, repeated_segments: List[Dict] = None) -> Dict:
+def analyze_structure(audio_data: np.ndarray, sr: int, chroma: np.ndarray) -> Dict:
     """
     Analyze audio structure: beats, boundaries, and section labels.
 
@@ -314,7 +260,6 @@ def analyze_structure(audio_data: np.ndarray, sr: int, chroma: np.ndarray, repea
         audio_data: Audio signal
         sr: Sample rate
         chroma: Chroma features from spectral_analyzer
-        repeated_segments: Optional list of repeated segment dicts from spectral_analyzer (V2 improvement)
 
     Returns:
         Dict with beat_info, boundaries, and sections
@@ -325,8 +270,8 @@ def analyze_structure(audio_data: np.ndarray, sr: int, chroma: np.ndarray, repea
     # Detect structural boundaries
     boundaries = detect_structure_boundaries(audio_data, sr)
 
-    # Label sections (V2: now integrates repeated_segments)
-    sections = label_sections(audio_data, sr, boundaries, chroma, repeated_segments)
+    # Label sections
+    sections = label_sections(audio_data, sr, boundaries, chroma)
 
     return {
         'beat_info': beat_info,
