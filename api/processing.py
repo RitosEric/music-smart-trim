@@ -9,7 +9,7 @@ from typing import Dict, Callable, Optional, List
 # Add parent directory to path to import src modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.cli import run_pipeline, NoFreshStrategiesError
+from src.cli import run_pipeline
 from api.storage import get_job_dir
 
 
@@ -116,16 +116,6 @@ def process_audio(
                 'mode': 'trim' if target_length < result['original_length'] else 'extend',
                 'all_strategy_names': result.get('all_strategy_names', []),
             }
-        }
-
-    except NoFreshStrategiesError as e:
-        # All variations have been shown. Surface a clean, user-facing message
-        # under status 'failed' so the existing frontend error path renders it.
-        if progress_callback:
-            progress_callback(str(e), 0)
-        return {
-            'status': 'failed',
-            'error': str(e),
         }
 
     except Exception as e:
