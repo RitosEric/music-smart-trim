@@ -572,16 +572,13 @@ def score_musical_coherence(
 
 def score_length_accuracy(target_length: float, resulting_length: float) -> float:
     """
-    Score length accuracy (max 20 points) - STRICT enforcement with steeper penalty.
-
-    The user explicitly requests a target length. Strategies that deviate
-    significantly should be heavily penalized.
+    Score length accuracy (max 20 points) - STRICT ±15s enforcement.
 
     Thresholds (strict):
-    - ±0-3s → 20 points (excellent)
-    - ±3-10s → 20-10 points (good, linear decay)
-    - ±10-20s → 10-0 points (poor, steep penalty)
-    - >±20s → 0 points (unacceptable)
+    - ±0-5s → 20 points (excellent)
+    - ±5-15s → 15-5 points (acceptable, linear decay)
+    - ±15-30s → 5-0 points (poor, steep penalty)
+    - >±30s → 0 points (unacceptable)
 
     Args:
         target_length: Target length in seconds
@@ -592,16 +589,16 @@ def score_length_accuracy(target_length: float, resulting_length: float) -> floa
     """
     error = abs(resulting_length - target_length)
 
-    if error <= 3.0:
+    if error <= 5.0:
         return 20.0
-    elif error <= 10.0:
-        # Linear decay: 20 points at 3s → 10 points at 10s
-        return 20.0 - (error - 3.0) * (10.0 / 7.0)
-    elif error <= 20.0:
-        # Steep penalty: 10 points at 10s → 0 points at 20s
-        return 10.0 - (error - 10.0) * 1.0
+    elif error <= 15.0:
+        # Linear decay: 20 points at 5s → 5 points at 15s
+        return 20.0 - (error - 5.0) * 1.5
+    elif error <= 30.0:
+        # Steep penalty: 5 points at 15s → 0 points at 30s
+        return 5.0 - (error - 15.0) * (5.0 / 15.0)
     else:
-        # Zero points for errors > 20s
+        # Zero points for errors > 30s
         return 0.0
 
 
@@ -737,15 +734,14 @@ def score_strategy(
         # BUT we want 35 pts total, so scale down slightly
         transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (35.0 / 40.0)
 
-    # Score length accuracy (35 points max) - INCREASED WEIGHT
-    # Length is a user constraint - if user asks for 60s, result should be ~60s
-    # Strategies that miss target by 20+ seconds should be heavily penalized
+    # Score length accuracy (15 points max) - RESEARCH-BACKED
+    # Research: Length is a user constraint, not perceptual quality - lower weight
     length_score = score_length_accuracy(
         strategy.target_length, resulting_length
-    ) * 1.75  # Scale 20→35
+    ) * 0.75  # Scale 20→15
 
-    # Calculate total points (coherence 40 + transition 25 + length 35 = 100)
-    total_points = coherence_score * 0.8 + transition_score * (25.0/35.0) + length_score
+    # Calculate total points (coherence 50 + transition 35 + length 15 = 100)
+    total_points = coherence_score + transition_score + length_score
 
     # Convert to star rating (0.1 increments)
     star_rating = points_to_stars(total_points)

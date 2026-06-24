@@ -310,25 +310,6 @@ def run_pipeline(
         scored_strategies = [s for s in scored_strategies if s['strategy'].name not in excluded_strategies]
         print(f"Remaining candidates: {len(scored_strategies)}")
 
-    # Hard filter: reject strategies that miss target by >25% (e.g., 60s target → reject >75s or <45s)
-    # The user explicitly requested a target length - we shouldn't return wildly different results.
-    # Use the larger of 15s or 25% of target as the max acceptable deviation.
-    max_deviation = max(15.0, target_length * 0.25)
-    print(f"\nFiltering strategies within ±{max_deviation:.1f}s of target ({target_length:.1f}s)...")
-
-    on_target_strategies = [
-        s for s in scored_strategies
-        if abs(s['score']['resulting_length'] - target_length) <= max_deviation
-    ]
-
-    if on_target_strategies:
-        print(f"  Kept {len(on_target_strategies)}/{len(scored_strategies)} on-target strategies")
-        scored_strategies = on_target_strategies
-    else:
-        # No strategies hit target - keep all and sort by closeness to target
-        print(f"  No strategies within tolerance - sorting all by closeness to target")
-        scored_strategies.sort(key=lambda s: abs(s['score']['resulting_length'] - target_length))
-
     # Select top 3 strategies (with quality retry if needed)
     strategies, scores = retry_for_quality(
         scored_strategies, clusters, original_length, target_length,
