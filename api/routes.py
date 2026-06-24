@@ -117,6 +117,7 @@ def process_file():
             'use_mert': data.get('use_mert', False),
             'min_segment_duration': data.get('min_segment_duration', 10.0),
             'regenerate_seed': data.get('regenerate_seed', None),
+            'strict_length': data.get('strict_length', False),
         }
 
         if params['target_length'] is None or params['target_length'] <= 0:

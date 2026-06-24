@@ -65,6 +65,7 @@ def process_audio(
         use_mert = params.get('use_mert', False)
         min_segment_duration = params.get('min_segment_duration', 10.0)
         regenerate_seed = params.get('regenerate_seed', None)
+        strict_length = params.get('strict_length', False)
 
         if progress_callback:
             progress_callback("Analyzing audio structure...", 30)
@@ -82,11 +83,16 @@ def process_audio(
             use_mert=use_mert,
             excluded_strategies=None,
             auto_protect=auto_protect,
-            min_segment_duration=min_segment_duration
+            min_segment_duration=min_segment_duration,
+            strict_length=strict_length,
+            progress_callback=progress_callback,
         )
 
         if progress_callback:
-            progress_callback("Generating outputs...", 80)
+            # Bumped from 80 → 90 so retry messages emitted by
+            # retry_for_quality / retry_for_strict_length (which top out at
+            # 75%) don't get visually undercut by this post-pipeline milestone.
+            progress_callback("Generating outputs...", 90)
 
         # Format response - return top 3 strategies from the pipeline
         strategies = result.get('strategies', [])
@@ -115,6 +121,8 @@ def process_audio(
                 'outputs': outputs,
                 'mode': 'trim' if target_length < result['original_length'] else 'extend',
                 'all_strategy_names': result.get('all_strategy_names', []),
+                'strict_length_requested': result.get('strict_length_requested', False),
+                'strict_length_met': result.get('strict_length_met', False),
             }
         }
 

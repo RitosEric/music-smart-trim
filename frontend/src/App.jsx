@@ -80,6 +80,7 @@ function App() {
         protectedRegions: params.protectedRegions,
         autoProtect: params.autoProtect,
         useMert: params.useMert,
+        strictLength: params.strictLength,
         minSegmentDuration: params.minSegmentDuration,
       });
 
@@ -173,6 +174,7 @@ function App() {
         ),
         autoProtect: false,
         useMert: false,
+        strictLength: results.strict_length_requested === true,
         regenerateSeed: Date.now() % 1000,
       });
 
@@ -328,6 +330,8 @@ function App() {
             onRegenerate={handleRegenerate}
             onDownload={handleDownload}
             onBackToConfigure={handleBackToConfigure}
+            strictLengthRequested={results.strict_length_requested === true}
+            strictLengthMet={results.strict_length_met === true}
           />
         )}
 

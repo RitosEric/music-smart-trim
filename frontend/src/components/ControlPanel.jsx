@@ -10,6 +10,7 @@ function ControlPanel({
   const [targetLength, setTargetLength] = useState("");
   const [autoProtect, setAutoProtect] = useState(false);
   const [useMert, setUseMert] = useState(false);
+  const [strictLength, setStrictLength] = useState(false);
   const [minSegmentDuration, setMinSegmentDuration] = useState(10.0);
   const [mode, setMode] = useState(null);
   const [error, setError] = useState(null);
@@ -75,6 +76,7 @@ function ControlPanel({
       targetLength: target,
       autoProtect,
       useMert,
+      strictLength,
       minSegmentDuration,
       protectedRegions: formattedRegions,
     });
@@ -168,6 +170,35 @@ function ControlPanel({
               type="checkbox"
               checked={useMert}
               onChange={(e) => setUseMert(e.target.checked)}
+              disabled={disabled}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+          </label>
+        </div>
+
+        {/* Strict Length Toggle */}
+        <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+          <div className="flex-1">
+            <label
+              htmlFor="strictLength"
+              className="font-medium text-gray-700 cursor-pointer"
+            >
+              Strict Length (±15s)
+            </label>
+            <p className="text-xs text-gray-500 mt-1">
+              Force the output to stay within 15 seconds of your target. Cuts
+              may sound rougher because length is prioritized over musical
+              quality. If no compliant option can be found after 5 retries, the
+              closest options will be shown with a warning.
+            </p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              id="strictLength"
+              type="checkbox"
+              checked={strictLength}
+              onChange={(e) => setStrictLength(e.target.checked)}
               disabled={disabled}
               className="sr-only peer"
             />

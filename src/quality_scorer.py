@@ -616,10 +616,10 @@ def score_strategy(
 
     Calculates resulting length, scores all components, and converts total to star rating.
 
-    Scoring weights (V6 - Research-Backed):
+    Scoring weights:
     - Musical coherence: 50 points (50%) - includes cut pattern bonus / loop quality, optional MERT
-    - Transition smoothness: 35 points (35%) - spectral flux, LUFS loudness, tempo stability
-    - Length accuracy: 15 points (15%) - STRICT ±15s enforcement
+    - Transition smoothness: 30 points (30%) - spectral flux, LUFS loudness, tempo stability
+    - Length accuracy: 20 points (20%) - STRICT ±15s enforcement
     Total: 100 points → converted to 0.0-5.0 star rating (0.1 increments)
 
     Research justification:
@@ -643,8 +643,8 @@ def score_strategy(
             - star_rating: Star rating (0.0-5.0 in 0.1 increments)
             - breakdown: Dict with component scores
                 - musical_coherence: 0-50 points
-                - transition_smoothness: 0-35 points (research-backed metrics)
-                - length_accuracy: 0-15 points
+                - transition_smoothness: 0-30 points (research-backed metrics)
+                - length_accuracy: 0-20 points
             - resulting_length: Resulting audio length in seconds
     """
     # Calculate resulting length from rendered audio
@@ -662,7 +662,7 @@ def score_strategy(
             original_audio, sr, strategy.loop_points, original_length
         )
 
-        # Score loop transition smoothness (35 points max) - RESEARCH-BACKED
+        # Score loop transition smoothness (30 points max) - RESEARCH-BACKED
         # Base loop boundary score (15 pts)
         transition_score = score_loop_transitions(
             original_audio, sr, strategy.loop_points
@@ -691,8 +691,8 @@ def score_strategy(
         else:
             tempo_score = 3.5
 
-        # Combine transition scores (15 + 5 + 4 + 7 = 31, scale to 35)
-        transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (35.0 / 31.0)
+        # Combine transition scores (15 + 5 + 4 + 7 = 31, scale to 30)
+        transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (30.0 / 31.0)
 
         # Optional MERT bonus for loop transitions
         if use_mert:
@@ -712,7 +712,7 @@ def score_strategy(
                 # Add bonus to coherence (capped at 50 points total)
                 coherence_score = min(50.0, coherence_score + mert_bonus)
 
-        # Score transition smoothness (35 points max) - RESEARCH-BACKED
+        # Score transition smoothness (30 points max) - RESEARCH-BACKED
         # Base score from phase alignment and zero-crossings (15 pts)
         transition_score = score_transition_smoothness(
             original_audio, sr, strategy.cut_points, strategy.fade_regions
@@ -731,16 +731,18 @@ def score_strategy(
             tempo_score = 3.5  # Neutral score if no rendered audio
 
         # Combine: 15 pts base + 10 pts spectral + 8 pts loudness + 7 pts tempo = 40 pts total
-        # BUT we want 35 pts total, so scale down slightly
-        transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (35.0 / 40.0)
+        # Scale to 30 pts (transition is now 30%, length raised to 20%).
+        transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (30.0 / 40.0)
 
-    # Score length accuracy (15 points max) - RESEARCH-BACKED
-    # Research: Length is a user constraint, not perceptual quality - lower weight
+    # Score length accuracy (20 points max) — full weight, no downscale.
+    # Length is a user constraint and the default scorer historically
+    # under-weighted it (length_score * 0.75 → 15 pts), letting strategies
+    # drift well past ±15s. Restoring full 20 pts narrows the deviation.
     length_score = score_length_accuracy(
         strategy.target_length, resulting_length
-    ) * 0.75  # Scale 20→15
+    )
 
-    # Calculate total points (coherence 50 + transition 35 + length 15 = 100)
+    # Calculate total points (coherence 50 + transition 30 + length 20 = 100)
     total_points = coherence_score + transition_score + length_score
 
     # Convert to star rating (0.1 increments)

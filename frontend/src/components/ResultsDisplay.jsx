@@ -118,12 +118,15 @@ function ResultsDisplay({
   onRegenerate,
   onDownload,
   onBackToConfigure,
+  strictLengthRequested = false,
+  strictLengthMet = false,
 }) {
   if (!results || results.length === 0) {
     return null;
   }
 
   const [primary, ...alternates] = results;
+  const showStrictFallback = strictLengthRequested && !strictLengthMet;
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
@@ -172,6 +175,19 @@ function ResultsDisplay({
           </button>
         </div>
       </div>
+
+      {showStrictFallback && (
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-lg">
+          <p className="text-sm font-semibold text-amber-900">
+            Strict length couldn't be met
+          </p>
+          <p className="text-sm text-amber-800 mt-1">
+            We retried with five different seeds but no strategy landed within
+            15 seconds of your target. Showing the closest options we found
+            instead — their durations may be more than 15s off target.
+          </p>
+        </div>
+      )}
 
       {/* Primary Result */}
       <div className="mb-6">

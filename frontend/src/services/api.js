@@ -39,6 +39,7 @@ export async function processAudio(params) {
     useMert = false,
     minSegmentDuration = 10.0,
     regenerateSeed = null,
+    strictLength = false,
   } = params;
 
   const response = await api.post("/process", {
@@ -49,6 +50,7 @@ export async function processAudio(params) {
     use_mert: useMert,
     min_segment_duration: minSegmentDuration,
     regenerate_seed: regenerateSeed,
+    strict_length: strictLength,
   });
 
   return response.data;
