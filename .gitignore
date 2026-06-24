@@ -46,7 +46,18 @@ tests/fixtures/*.flac
 # Logs
 *.log
 
+# API storage (uploaded/processed files)
+api/storage/
+api/storage_data/
+# Stray nested tree created when the server is started from inside api/
+# (Path("api/storage_data") resolves relative to cwd; see CLAUDE.md gotcha).
+api/api/
+api/__pycache__/
+*.pyc
+.env
+
 # Claude Code specific files
+CLAUDE.md
 .claude/
 .superpowers/
 docs/superpowers/
