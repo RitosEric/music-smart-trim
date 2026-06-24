@@ -119,11 +119,20 @@ function ResultsDisplay({
   onDownload,
   onBackToConfigure,
 }) {
+  // Debug logging
+  console.log("ResultsDisplay received results:", results);
+  console.log("Results length:", results?.length);
+  console.log("Results array:", JSON.stringify(results, null, 2));
+
   if (!results || results.length === 0) {
     return null;
   }
 
   const [primary, ...alternates] = results;
+
+  console.log("Primary:", primary);
+  console.log("Alternates:", alternates);
+  console.log("Alternates length:", alternates.length);
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
