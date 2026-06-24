@@ -103,14 +103,15 @@ def retry_for_quality(
         mode: Processing mode ("trim" or "extend")
 
     Returns:
-        Tuple of (strategies, scores) - best strategy and its score
+        Tuple of (strategies, scores) - top 3 strategies and their scores
     """
     from src.output_generator import render_strategy
 
     scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
-    best = scored_strategies[0]
-    strategies = [best['strategy']]
-    scores = [best['score']]
+    # Take top 3 strategies instead of just the best
+    top_strategies = scored_strategies[:3]
+    strategies = [s['strategy'] for s in top_strategies]
+    scores = [s['score'] for s in top_strategies]
 
     max_rating = scores[0]['star_rating']
 
@@ -144,9 +145,10 @@ def retry_for_quality(
                 })
 
             scored_strategies.sort(key=lambda x: x['score']['star_rating'], reverse=True)
-            best = scored_strategies[0]
-            strategies = [best['strategy']]
-            scores = [best['score']]
+            # Take top 3 strategies instead of just the best
+            top_strategies = scored_strategies[:3]
+            strategies = [s['strategy'] for s in top_strategies]
+            scores = [s['score'] for s in top_strategies]
 
             max_rating = scores[0]['star_rating']
             if max_rating >= MIN_ACCEPTABLE_QUALITY:
@@ -308,18 +310,20 @@ def run_pipeline(
         scored_strategies = [s for s in scored_strategies if s['strategy'].name not in excluded_strategies]
         print(f"Remaining candidates: {len(scored_strategies)}")
 
-    # Select BEST strategy (with quality retry if needed)
+    # Select top 3 strategies (with quality retry if needed)
     strategies, scores = retry_for_quality(
         scored_strategies, clusters, original_length, target_length,
         structure, audio_data, sample_rate, use_mert, regenerate_seed, mode,
         min_segment_duration
     )
 
-    print(f"\n✨ Best strategy selected:")
-    print(f"  {strategies[0].name} - {scores[0]['star_rating']:.1f}★")
+    print(f"\n✨ Top {len(strategies)} strategies selected:")
+    for i, (strategy, score) in enumerate(zip(strategies, scores)):
+        marker = "★ BEST" if i == 0 else "      "
+        print(f"  {marker}  {strategy.name} - {score['star_rating']:.1f}★")
 
-    # Stage 6: Generate output for BEST strategy only
-    print(f"\nGenerating output file to {output_dir}...")
+    # Stage 6: Generate output for ALL top strategies
+    print(f"\nGenerating output files to {output_dir}...")
     processing_time = time.time() - start_time
 
     generate_outputs(

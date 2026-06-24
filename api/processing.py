@@ -88,13 +88,10 @@ def process_audio(
         if progress_callback:
             progress_callback("Generating outputs...", 80)
 
-        # Format response - return only top 3 out of 5 strategies
+        # Format response - return top 3 strategies from the pipeline
         strategies = result.get('strategies', [])
         outputs = []
-        # Take only the top 3 results (they're already sorted by score)
-        print(f"DEBUG: Total strategies generated: {len(result['scores'])}")
-        print(f"DEBUG: Selecting top 3 out of {len(result['scores'])}")
-        for i, (score, output_file) in enumerate(zip(result['scores'][:3], result['output_files'][:3])):
+        for i, (score, output_file) in enumerate(zip(result['scores'], result['output_files'])):
             strategy_name = strategies[i].name if i < len(strategies) else None
             outputs.append({
                 'rank': i + 1,
@@ -104,8 +101,6 @@ def process_audio(
                 'path': str(output_file),
                 'strategy_name': strategy_name,
             })
-        print(f"DEBUG: Returning {len(outputs)} outputs to frontend")
-        print(f"DEBUG: Output filenames: {[o['filename'] for o in outputs]}")
 
         if progress_callback:
             progress_callback("Complete!", 100)
