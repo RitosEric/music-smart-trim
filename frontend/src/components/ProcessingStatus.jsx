@@ -31,6 +31,12 @@ function ProcessingStatus({
           💡 This may take 1-3 minutes depending on file length and settings
         </p>
       </div>
+
+      <p className="mt-2 text-xs text-gray-400">
+        The final length may not exactly match your target — edits are made at
+        whole-section boundaries. For a length within ±15s, enable the Strict
+        Length toggle.
+      </p>
     </div>
   );
 }
