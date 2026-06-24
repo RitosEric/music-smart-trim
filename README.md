@@ -35,8 +35,9 @@ python -m src.cli --input song.mp3 --target 120
 python -m src.cli --input song.mp3 --target 240
 ```
 
-Results are written to `./output/` as ranked WAV files (`option_0_*.wav` is the
-best), alongside a `summary.txt`.
+Results are written to `./output/` as ranked WAV files named after the song —
+`<song> - option 1 - <score> stars.wav`, where option 1 is the best — alongside
+a `summary.txt`.
 
 ### Options
 
@@ -70,7 +71,8 @@ npm start
 
 Open <http://localhost:3000>, drop in an audio file, choose a target length, and
 download the result. Toggles let you protect the intro/outro or enforce the
-strict ±15s length.
+strict ±15s length, and a light/dark switch lives in the top-right corner. The
+interface uses a frosted "liquid glass" style and remembers your theme choice.
 
 ## How it works
 

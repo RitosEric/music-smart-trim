@@ -20,17 +20,6 @@ export function formatFileSize(bytes) {
 }
 
 /**
- * Parse MM:SS string to seconds.
- */
-export function parseTimeString(timeStr) {
-  const parts = timeStr.split(":");
-  if (parts.length !== 2) return 0;
-  const mins = parseInt(parts[0], 10);
-  const secs = parseInt(parts[1], 10);
-  return mins * 60 + secs;
-}
-
-/**
  * Render star rating as whole-star symbols (rounds to nearest integer).
  * The exact decimal value is shown separately as "X.X / 5.0" by the caller.
  */

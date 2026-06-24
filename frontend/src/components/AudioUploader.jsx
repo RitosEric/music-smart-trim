@@ -38,7 +38,6 @@ function AudioUploader({ onUploadComplete, disabled = false }) {
 
       try {
         const result = await uploadFile(file);
-        console.log("Upload successful:", result);
         onUploadComplete(result);
       } catch (err) {
         console.error("Upload error:", err);
@@ -96,11 +95,22 @@ function AudioUploader({ onUploadComplete, disabled = false }) {
   return (
     <div className="w-full">
       <div
+        role="button"
+        tabIndex={disabled || uploading ? -1 : 0}
+        aria-label="Upload an audio file — click or drag and drop"
         className={`
-          relative border-2 border-dashed rounded-lg p-12 text-center
-          transition-all duration-200 ease-in-out
-          ${isDragging ? "border-primary bg-blue-50" : "border-gray-300"}
-          ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:border-primary hover:bg-gray-50"}
+          group relative overflow-hidden rounded-3xl border-2 border-dashed p-12 text-center
+          transition-all duration-200 ease-out
+          ${
+            isDragging
+              ? "scale-[1.01] border-indigo-400 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/10"
+              : "border-slate-300/80 bg-white/30 dark:border-white/15 dark:bg-white/[0.03]"
+          }
+          ${
+            disabled
+              ? "cursor-not-allowed opacity-50"
+              : "cursor-pointer hover:border-indigo-400/80 hover:bg-white/50 focus-visible:border-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60 dark:hover:bg-white/[0.06]"
+          }
           ${uploading ? "pointer-events-none" : ""}
         `}
         onDragOver={handleDragOver}
@@ -111,6 +121,12 @@ function AudioUploader({ onUploadComplete, disabled = false }) {
           !uploading &&
           document.getElementById("file-input").click()
         }
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && !disabled && !uploading) {
+            e.preventDefault();
+            document.getElementById("file-input").click();
+          }
+        }}
       >
         <input
           id="file-input"
@@ -123,41 +139,43 @@ function AudioUploader({ onUploadComplete, disabled = false }) {
 
         {uploading ? (
           <div className="flex flex-col items-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
-            <p className="text-gray-600">Uploading...</p>
+            <div className="mb-4 h-12 w-12 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-500 dark:border-white/10 dark:border-t-indigo-400"></div>
+            <p className="text-slate-600 dark:text-slate-300">Uploading…</p>
           </div>
         ) : (
           <>
-            <svg
-              className="mx-auto h-12 w-12 text-gray-400 mb-4"
-              stroke="currentColor"
-              fill="none"
-              viewBox="0 0 48 48"
-              aria-hidden="true"
-            >
-              <path
-                d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <p className="text-lg text-gray-700 mb-2">
-              <span className="font-semibold text-primary">
+            <span className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-brand-gradient text-white shadow-lg transition-transform duration-200 group-hover:scale-105">
+              <svg
+                className="h-8 w-8"
+                stroke="currentColor"
+                fill="none"
+                strokeWidth="2"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"
+                />
+              </svg>
+            </span>
+            <p className="mb-1 text-lg text-slate-700 dark:text-slate-200">
+              <span className="font-semibold text-indigo-600 dark:text-indigo-400">
                 Click to upload
               </span>{" "}
               or drag and drop
             </p>
-            <p className="text-sm text-gray-500">
-              MP3, WAV, FLAC, or M4A (max 50MB)
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              MP3, WAV, FLAC, or M4A · up to 50MB
             </p>
           </>
         )}
       </div>
 
       {error && (
-        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-600">{error}</p>
+        <div className="mt-4 rounded-2xl border border-red-300/60 bg-red-50/80 p-3 backdrop-blur-md dark:border-red-500/30 dark:bg-red-950/40">
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         </div>
       )}
     </div>

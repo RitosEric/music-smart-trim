@@ -117,6 +117,8 @@ def process_file():
             'min_segment_duration': data.get('min_segment_duration', 10.0),
             'regenerate_seed': data.get('regenerate_seed', None),
             'strict_length': data.get('strict_length', False),
+            # Used to name output files "<song> - option n - score.wav".
+            'song_name': job_status[job_id].get('display_name'),
         }
 
         if params['target_length'] is None or params['target_length'] <= 0:
@@ -180,11 +182,17 @@ def download_file(job_id, filename):
     Inline by default so <audio> elements can play the response.
     Pass ?download=1 to force a save-as download.
     """
-    # Sanitize only the basename — the previous implementation passed
-    # "output/<filename>" through secure_filename, which replaces "/" with "_"
-    # and never resolved into the output subfolder.
-    safe_name = secure_filename(filename)
-    if not safe_name:
+    # Strip any path components to block traversal, but keep unicode and spaces
+    # so song-name outputs like "ヨルシカ - 老人と海 - option 1 - 5.0 stars.wav"
+    # still resolve. secure_filename() can't be used here: it deletes CJK
+    # characters and replaces spaces, so it would never match the on-disk name.
+    safe_name = os.path.basename(filename)
+    if (
+        not safe_name
+        or safe_name in ('.', '..')
+        or '/' in safe_name
+        or '\\' in safe_name
+    ):
         return jsonify({'error': 'Invalid filename'}), 400
 
     job_dir = get_job_dir(job_id)

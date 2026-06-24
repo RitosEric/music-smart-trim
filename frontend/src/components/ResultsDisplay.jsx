@@ -2,47 +2,73 @@ import React from "react";
 import { formatStarRating, formatTime } from "../utils/formatters";
 import { getDownloadUrl } from "../services/api";
 import WaveformDisplay from "./WaveformDisplay";
+import useTheme from "../hooks/useTheme";
 
 function ResultCard({ result, jobId, rank, isPrimary = false, onDownload }) {
+  const { isDark } = useTheme();
   const audioUrl = getDownloadUrl(jobId, result.filename);
+
+  // Brand indigo progress for the best take; muted slate for alternates.
+  const waveColor = isPrimary
+    ? isDark
+      ? "#64748b"
+      : "#94a3b8"
+    : isDark
+      ? "#3f445c"
+      : "#cbd5e1";
+  const progressColor = isPrimary
+    ? isDark
+      ? "#818cf8"
+      : "#6366f1"
+    : isDark
+      ? "#64748b"
+      : "#94a3b8";
 
   return (
     <div
       className={
-        "rounded-lg border-2 p-6 transition-all duration-200 " +
+        "p-6 " +
         (isPrimary
-          ? "border-primary bg-blue-50 shadow-lg"
-          : "border-gray-300 bg-gray-100 opacity-75")
+          ? "glass-panel ring-1 ring-indigo-400/40 dark:ring-indigo-400/30"
+          : "glass-soft opacity-95")
       }
     >
-      <div className="flex items-start justify-between mb-4">
+      <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-3">
             <span
               className={
-                "text-2xl font-bold " +
-                (isPrimary ? "text-primary" : "text-gray-500")
+                "font-display text-2xl font-bold " +
+                (isPrimary
+                  ? "text-indigo-600 dark:text-indigo-400"
+                  : "text-slate-400 dark:text-slate-500")
               }
             >
               #{rank}
             </span>
             {isPrimary && (
-              <span className="px-3 py-1 bg-primary text-white text-xs font-semibold rounded-full">
+              <span className="rounded-full bg-brand-gradient px-3 py-1 text-xs font-semibold text-white shadow-sm">
                 BEST
               </span>
             )}
           </div>
           <p
             className={
-              "text-3xl mt-2 " + (isPrimary ? "" : "text-gray-500")
+              "mt-2 text-3xl " +
+              (isPrimary
+                ? "text-amber-400"
+                : "text-slate-400 dark:text-slate-500")
             }
+            aria-label={`${result.rating.toFixed(1)} out of 5 stars`}
           >
             {formatStarRating(result.rating)}
           </p>
           <p
             className={
-              "text-sm mt-1 " +
-              (isPrimary ? "text-gray-600" : "text-gray-500")
+              "mt-1 text-sm tabular-nums " +
+              (isPrimary
+                ? "text-slate-600 dark:text-slate-300"
+                : "text-slate-500 dark:text-slate-400")
             }
           >
             {result.rating.toFixed(1)} / 5.0 stars
@@ -50,22 +76,20 @@ function ResultCard({ result, jobId, rank, isPrimary = false, onDownload }) {
         </div>
 
         <div className="text-right">
+          <p className="text-sm text-slate-500 dark:text-slate-400">Duration</p>
           <p
             className={
-              "text-sm " + (isPrimary ? "text-gray-600" : "text-gray-500")
-            }
-          >
-            Duration
-          </p>
-          <p
-            className={
-              "text-lg font-semibold " +
-              (isPrimary ? "text-gray-800" : "text-gray-600")
+              "text-lg font-semibold tabular-nums " +
+              (isPrimary
+                ? "text-slate-900 dark:text-white"
+                : "text-slate-600 dark:text-slate-300")
             }
           >
             {formatTime(result.length)}
           </p>
-          <p className="text-xs text-gray-500">({result.length.toFixed(1)}s)</p>
+          <p className="text-xs tabular-nums text-slate-400 dark:text-slate-500">
+            ({result.length.toFixed(1)}s)
+          </p>
         </div>
       </div>
 
@@ -75,25 +99,22 @@ function ResultCard({ result, jobId, rank, isPrimary = false, onDownload }) {
           audioUrl={audioUrl}
           height={80}
           readOnly
-          waveColor={isPrimary ? "#9ca3af" : "#d1d5db"}
-          progressColor={isPrimary ? "#3b82f6" : "#9ca3af"}
+          waveColor={waveColor}
+          progressColor={progressColor}
         />
       </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-500">{result.filename}</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate text-xs text-slate-400 dark:text-slate-500">
+          {result.filename}
+        </p>
         <button
           onClick={() => onDownload(result.filename)}
-          className={
-            "px-3 py-1.5 text-sm border rounded transition-colors flex items-center gap-1 " +
-            (isPrimary
-              ? "text-gray-600 hover:text-primary border-gray-300 hover:border-primary"
-              : "text-gray-500 hover:text-gray-700 border-gray-400 hover:border-gray-600")
-          }
+          className="btn-ghost px-3 py-1.5 text-sm"
           title="Download"
         >
           <svg
-            className="w-4 h-4"
+            className="h-4 w-4"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -129,17 +150,16 @@ function ResultsDisplay({
   const showStrictFallback = strictLengthRequested && !strictLengthMet;
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <h2 className="text-2xl font-bold text-gray-800">Results</h2>
+    <div className="glass-panel p-6">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-2xl font-bold text-slate-900 dark:text-white">
+          Results
+        </h2>
         <div className="flex items-center gap-2">
           {onBackToConfigure && (
-            <button
-              onClick={onBackToConfigure}
-              className="px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
-            >
+            <button onClick={onBackToConfigure} className="btn-ghost text-sm">
               <svg
-                className="w-5 h-5"
+                className="h-5 w-5"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -154,12 +174,9 @@ function ResultsDisplay({
               Back to Configure
             </button>
           )}
-          <button
-            onClick={onRegenerate}
-            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors flex items-center gap-2"
-          >
+          <button onClick={onRegenerate} className="btn-primary text-sm">
             <svg
-              className="w-5 h-5"
+              className="h-5 w-5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -177,11 +194,11 @@ function ResultsDisplay({
       </div>
 
       {showStrictFallback && (
-        <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-lg">
-          <p className="text-sm font-semibold text-amber-900">
+        <div className="mb-6 rounded-2xl border border-amber-300/60 bg-amber-50/80 p-4 backdrop-blur-md dark:border-amber-400/30 dark:bg-amber-500/10">
+          <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
             Strict length couldn't be met
           </p>
-          <p className="text-sm text-amber-800 mt-1">
+          <p className="mt-1 text-sm text-amber-800 dark:text-amber-300/90">
             We tried progressively more aggressive edits but none landed within
             15 seconds of your target. Showing the closest options we found
             instead — their durations may be more than 15s off target.
@@ -203,7 +220,7 @@ function ResultsDisplay({
       {/* Alternates */}
       {alternates.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold text-gray-700 mb-3">
+          <h3 className="mb-3 font-display text-lg font-semibold text-slate-700 dark:text-slate-200">
             Alternative Options
           </h3>
           <div className="space-y-4">
@@ -221,19 +238,21 @@ function ResultsDisplay({
         </div>
       )}
 
-      <div className="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-2">
-        <p className="text-sm text-gray-600">
+      <div className="glass-soft mt-6 space-y-2 p-4">
+        <p className="text-sm text-slate-600 dark:text-slate-300">
           Showing top 3 results out of 5 strategies, ranked by quality score.
-          The best result is highlighted. Play each option, then download
-          the version you like — or click Regenerate for 3 different variations.
+          The best result is highlighted. Play each option, then download the
+          version you like — or click Regenerate for 3 different variations.
         </p>
-        <p className="text-sm text-gray-500">
-          <span className="font-medium text-gray-700">Heads up:</span> some
-          options may sound similar to each other. Songs with a tight section
-          structure (few clear chorus/verse boundaries) can leave the engine
-          with limited cut choices, so several strategies end up landing on the
-          same cuts. Regenerate can also return overlapping results for the
-          same reason — try adjusting the target length or protected regions
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          <span className="font-medium text-slate-700 dark:text-slate-200">
+            Heads up:
+          </span>{" "}
+          some options may sound similar to each other. Songs with a tight
+          section structure (few clear chorus/verse boundaries) can leave the
+          engine with limited cut choices, so several strategies end up landing
+          on the same cuts. Regenerate can also return overlapping results for
+          the same reason — try adjusting the target length or protected regions
           if you want more variety.
         </p>
       </div>

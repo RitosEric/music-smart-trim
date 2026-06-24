@@ -341,6 +341,7 @@ def run_pipeline(
     min_segment_duration: float = 10.0,
     strict_length: bool = False,
     progress_callback: Optional[Callable[[str, int], None]] = None,
+    song_name: Optional[str] = None,
 ) -> Dict:
     """
     Run complete pipeline from audio loading to output generation.
@@ -374,6 +375,8 @@ def run_pipeline(
         regenerate_seed: Optional seed for regeneration (None for first run)
         excluded_strategies: List of strategy names to exclude (for regeneration)
         auto_protect: Whether to automatically protect intro/outro (default: False)
+        song_name: Human-readable title used in output filenames. Defaults to
+            the input file's stem; the web layer passes the ID3 display name.
 
     Returns:
         Dict with keys:
@@ -507,7 +510,12 @@ def run_pipeline(
     print(f"\nGenerating output files to {output_dir}...")
     processing_time = time.time() - start_time
 
-    generate_outputs(
+    # Name outputs after the song so different songs don't all download as
+    # "option_0...". For the CLI the title falls back to the input file stem;
+    # the web layer passes the nicer ID3 "artist - title" display name.
+    effective_song_name = song_name or audio_path.stem
+
+    rendered_outputs = generate_outputs(
         audio_data,
         sample_rate,
         strategies,
@@ -516,15 +524,13 @@ def run_pipeline(
         str(audio_path),
         target_length,
         protected_regions_parsed,
-        processing_time
+        processing_time,
+        song_name=effective_song_name,
     )
 
-    # Collect output file paths
-    output_files = []
-    for i, score in enumerate(scores):
-        stars = score['star_rating']
-        output_filename = f"option_{i}_{stars:.1f}stars.wav"
-        output_files.append(str(output_dir / output_filename))
+    # Output names come straight from generate_outputs — the single source of
+    # truth — rather than being re-derived here (which used to drift).
+    output_files = [str(output_dir / o["filename"]) for o in rendered_outputs]
 
     print("Pipeline complete!")
 

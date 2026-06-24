@@ -64,6 +64,7 @@ def process_audio(
         min_segment_duration = params.get('min_segment_duration', 10.0)
         regenerate_seed = params.get('regenerate_seed', None)
         strict_length = params.get('strict_length', False)
+        song_name = params.get('song_name')  # ID3 "artist - title" for filenames
 
         if progress_callback:
             progress_callback("Analyzing audio structure...", 30)
@@ -83,6 +84,7 @@ def process_audio(
             min_segment_duration=min_segment_duration,
             strict_length=strict_length,
             progress_callback=progress_callback,
+            song_name=song_name,
         )
 
         if progress_callback:

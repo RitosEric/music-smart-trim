@@ -3,11 +3,38 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#eaeefb" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#05050c" media="(prefers-color-scheme: dark)" />
     <meta
       name="description"
-      content="Music Smart Trim - Intelligent Audio Editor"
+      content="Music Smart Trim — intelligently shorten or extend a song while keeping it musical."
     />
+
+    <link rel="icon" type="image/svg+xml" href="%PUBLIC_URL%/favicon.svg" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo.png" />
+
+    <!-- Fonts: Inter (body) + Sora (display), loaded without blocking text paint. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Set the theme class before paint to avoid a light/dark flash (FOUC). -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("mst-theme");
+          var prefersDark =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var dark = stored ? stored === "dark" : prefersDark;
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+
     <title>Music Smart Trim</title>
   </head>
   <body>

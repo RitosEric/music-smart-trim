@@ -7,9 +7,9 @@ function CoverThumb({ jobId, coverFilename, filename }) {
   const [errored, setErrored] = useState(false);
   if (!coverFilename || errored) {
     return (
-      <div className="w-16 h-16 rounded bg-gray-200 flex items-center justify-center text-gray-400 shrink-0">
+      <div className="grid h-16 w-16 shrink-0 place-items-center rounded-xl bg-brand-gradient text-white/90 shadow-sm">
         <svg
-          className="w-7 h-7"
+          className="h-7 w-7"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -29,7 +29,7 @@ function CoverThumb({ jobId, coverFilename, filename }) {
       src={getDownloadUrl(jobId, coverFilename)}
       alt={`Cover for ${filename}`}
       onError={() => setErrored(true)}
-      className="w-16 h-16 rounded object-cover shrink-0 bg-gray-200"
+      className="h-16 w-16 shrink-0 rounded-xl bg-slate-200 object-cover dark:bg-white/10"
     />
   );
 }
@@ -38,11 +38,11 @@ function RecentList({ recents, onSelect, onRemove }) {
   if (!recents || recents.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 mt-6">
-      <h2 className="text-lg font-semibold mb-1 text-gray-800">
+    <div className="glass-panel p-6">
+      <h2 className="mb-1 font-display text-lg font-semibold text-slate-900 dark:text-white">
         Recent uploads
       </h2>
-      <p className="text-xs text-gray-400 mb-4">
+      <p className="mb-4 text-xs text-slate-400 dark:text-slate-500">
         Only your {MAX_RECENT} most recent uploads are kept — older ones are
         removed automatically to save storage.
       </p>
@@ -50,22 +50,22 @@ function RecentList({ recents, onSelect, onRemove }) {
         {recents.map((r) => (
           <li
             key={r.jobId}
-            className="flex items-center gap-4 p-3 rounded-lg border border-gray-200 hover:border-primary hover:bg-blue-50 transition-colors"
+            className="glass-soft flex items-center gap-4 p-3 transition-all duration-200 hover:border-indigo-400/60 hover:bg-white/70 dark:hover:bg-white/[0.07]"
           >
             <button
               onClick={() => onSelect(r)}
-              className="flex items-center gap-4 flex-1 text-left"
+              className="flex flex-1 items-center gap-4 rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60"
             >
               <CoverThumb
                 jobId={r.jobId}
                 coverFilename={r.coverFilename}
                 filename={r.displayName || r.filename}
               />
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-900 truncate">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium text-slate-900 dark:text-white">
                   {r.displayName || r.filename || "Untitled"}
                 </p>
-                <p className="text-xs text-gray-500 mt-0.5">
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                   Original {formatTime(r.originalLength)}
                   {r.result?.target_length ? (
                     <>
@@ -79,10 +79,11 @@ function RecentList({ recents, onSelect, onRemove }) {
             <button
               onClick={() => onRemove(r.jobId)}
               title="Remove from Recent"
-              className="text-gray-400 hover:text-red-500 p-1 transition-colors"
+              aria-label={`Remove ${r.displayName || r.filename || "upload"} from recent`}
+              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50"
             >
               <svg
-                className="w-5 h-5"
+                className="h-5 w-5"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"

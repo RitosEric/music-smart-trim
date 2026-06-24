@@ -1,12 +1,55 @@
 """Output generator module for rendering audio with strategies applied."""
 
+import re
 import numpy as np
 import soundfile as sf
 import json
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any
 from src.trim_engine import TrimStrategy
 from src.crossfade import DEFAULT_CROSSFADE_MS, ms_to_samples
+
+# Characters that are illegal in filenames on common filesystems (Windows is
+# the strictest) plus C0 control codes. Unicode letters are intentionally kept
+# so titles like "ヨルシカ - 老人と海" stay readable.
+_ILLEGAL_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def safe_song_name(name: Optional[str], max_len: int = 80) -> str:
+    """
+    Sanitise a song title for use inside a filename.
+
+    Strips characters that are illegal in filenames, collapses whitespace, and
+    trims leading/trailing dots and spaces, while preserving unicode letters so
+    non-Latin titles remain recognisable. Falls back to "track" when nothing
+    usable remains.
+    """
+    if not name:
+        return "track"
+    # Normalise whitespace first so tabs/newlines become spaces rather than
+    # being swallowed as control characters by the illegal-char strip below.
+    cleaned = re.sub(r"\s+", " ", name)
+    cleaned = _ILLEGAL_FILENAME_CHARS.sub("", cleaned)
+    # Stripping illegal chars can leave doubled spaces (e.g. "a / b"); re-collapse.
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].strip(" .")
+    return cleaned or "track"
+
+
+def build_output_filename(
+    song_name: Optional[str], option_number: int, star_rating: float
+) -> str:
+    """
+    Build an output filename of the form
+    "<song> - option <n> - <score> stars.wav".
+
+    Including the (sanitised) song name keeps downloads from different songs
+    from colliding on a generic "option_0..." name. `option_number` is used
+    verbatim (callers pass a 1-based rank).
+    """
+    song = safe_song_name(song_name)
+    return f"{song} - option {option_number} - {star_rating:.1f} stars.wav"
 
 
 def _convert_to_serializable(obj: Any) -> Any:
@@ -278,13 +321,14 @@ def generate_outputs(
     input_file: str,
     target_length: float,
     protected_regions: List[Tuple[float, float]],
-    processing_time: float
-) -> None:
+    processing_time: float,
+    song_name: Optional[str] = None,
+) -> List[Dict]:
     """
     Generate output files for all strategies with metadata.
 
     Creates:
-    - Audio files: option_{i}_{stars}stars.wav
+    - Audio files: "<song> - option <n> - <score> stars.wav"
     - summary.json: Complete metadata
     - summary.txt: Human-readable summary
 
@@ -298,6 +342,12 @@ def generate_outputs(
         target_length: Target length in seconds
         protected_regions: List of protected region tuples
         processing_time: Processing time in seconds
+        song_name: Human-readable song title used in output filenames. Falls
+            back to "track" when empty.
+
+    Returns:
+        The list of rendered-output dicts (one per strategy), each carrying its
+        final ``filename`` — the authoritative source of output names.
     """
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -314,8 +364,9 @@ def generate_outputs(
         # Format star rating for filename (rounded to 0.1)
         stars = score['star_rating']
 
-        # Generate filename: option_{i}_{stars}stars.wav
-        output_filename = f"option_{i}_{stars:.1f}stars.wav"
+        # "<song> - option <n> - <score> stars.wav" — including the song name
+        # keeps downloads from different songs from colliding. Rank is 1-based.
+        output_filename = build_output_filename(song_name, i + 1, stars)
         output_path = output_dir / output_filename
 
         # Save audio file with high quality (PCM 16-bit)
@@ -383,3 +434,5 @@ def generate_outputs(
             f.write(f"Loops: {len(output['loop_points'])}\n")
             f.write(f"Fades: {len(output['fade_regions'])}\n")
             f.write("\n")
+
+    return rendered_outputs

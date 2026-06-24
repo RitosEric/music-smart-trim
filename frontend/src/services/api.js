@@ -64,7 +64,10 @@ export async function getStatus(jobId) {
  * Get download URL for processed file.
  */
 export function getDownloadUrl(jobId, filename) {
-  return `${API_BASE_URL}/download/${jobId}/${filename}`;
+  // Encode each path segment so output names containing spaces, unicode, or
+  // other special characters (e.g. "ヨルシカ - option 1 - 5.0 stars.wav")
+  // produce a valid URL. Flask decodes the segment back before lookup.
+  return `${API_BASE_URL}/download/${encodeURIComponent(jobId)}/${encodeURIComponent(filename)}`;
 }
 
 /**

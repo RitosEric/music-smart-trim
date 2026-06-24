@@ -79,15 +79,17 @@ function ControlPanel({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
-      <h2 className="text-xl font-semibold mb-6">Processing Settings</h2>
+    <div className="glass-panel p-6">
+      <h2 className="mb-6 font-display text-xl font-semibold text-slate-900 dark:text-white">
+        Processing Settings
+      </h2>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Target Length Input */}
         <div>
           <label
             htmlFor="targetLength"
-            className="block text-sm font-medium text-gray-700 mb-2"
+            className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300"
           >
             Target Length (seconds)
           </label>
@@ -101,94 +103,97 @@ function ControlPanel({
               onChange={(e) => setTargetLength(e.target.value)}
               placeholder={`Original: ${originalLength.toFixed(0)}s`}
               disabled={disabled}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+              className="glass-input pr-28 tabular-nums"
             />
             {mode && (
               <div
-                className={`absolute right-3 top-2.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                className={`absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full px-3 py-1 text-xs font-semibold ${
                   mode === "trim"
-                    ? "bg-orange-100 text-orange-800"
-                    : "bg-green-100 text-green-800"
+                    ? "bg-orange-500/15 text-orange-700 dark:bg-orange-400/15 dark:text-orange-300"
+                    : "bg-emerald-500/15 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300"
                 }`}
               >
-                {mode === "trim" ? "✂️ TRIM" : "➕ EXTEND"}
+                {mode === "trim" ? "TRIM" : "EXTEND"}
               </div>
             )}
           </div>
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
             Original length: {formatTime(originalLength)} (
             {originalLength.toFixed(1)}s)
           </p>
         </div>
 
         {/* Auto Protect Toggle */}
-        <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+        <div className="glass-soft flex items-center justify-between gap-4 p-4">
           <div className="flex-1">
             <label
               htmlFor="autoProtect"
-              className="font-medium text-gray-700 cursor-pointer"
+              className="cursor-pointer font-medium text-slate-800 dark:text-slate-100"
             >
               Auto-Protect Intro/Outro
             </label>
-            <p className="text-xs text-gray-500 mt-1">
-              Automatically protect the first and last 10-15 seconds
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Automatically protect the first and last 10–15 seconds.
             </p>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className="relative inline-flex shrink-0 cursor-pointer items-center">
             <input
               id="autoProtect"
               type="checkbox"
               checked={autoProtect}
               onChange={(e) => setAutoProtect(e.target.checked)}
               disabled={disabled}
-              className="sr-only peer"
+              className="peer sr-only"
             />
-            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+            <div className="peer h-6 w-11 rounded-full bg-slate-300 transition-colors after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-all after:content-[''] peer-checked:bg-indigo-500 peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400/70 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-transparent dark:bg-white/15 dark:peer-checked:bg-indigo-500"></div>
           </label>
         </div>
 
         {/* Strict Length Toggle */}
-        <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+        <div className="glass-soft flex items-center justify-between gap-4 p-4">
           <div className="flex-1">
             <label
               htmlFor="strictLength"
-              className="font-medium text-gray-700 cursor-pointer"
+              className="cursor-pointer font-medium text-slate-800 dark:text-slate-100"
             >
               Strict Length (±15s)
             </label>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               Force the output to stay within 15 seconds of your target. Cuts
               may sound rougher because length is prioritized over musical
               quality. If no option fits after several refinement passes, the
               closest results are shown with a warning.
             </p>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className="relative inline-flex shrink-0 cursor-pointer items-center">
             <input
               id="strictLength"
               type="checkbox"
               checked={strictLength}
               onChange={(e) => setStrictLength(e.target.checked)}
               disabled={disabled}
-              className="sr-only peer"
+              className="peer sr-only"
             />
-            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+            <div className="peer h-6 w-11 rounded-full bg-slate-300 transition-colors after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-all after:content-[''] peer-checked:bg-indigo-500 peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400/70 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-transparent dark:bg-white/15 dark:peer-checked:bg-indigo-500"></div>
           </label>
         </div>
 
         {/* Protected Regions Info */}
         {protectedRegions.length > 0 && (
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm font-medium text-blue-800 mb-2">
+          <div className="rounded-2xl border border-indigo-300/50 bg-indigo-50/70 p-4 backdrop-blur-md dark:border-indigo-400/20 dark:bg-indigo-500/10">
+            <p className="mb-2 text-sm font-medium text-indigo-800 dark:text-indigo-200">
               Protected Regions: {protectedRegions.length}{" "}
-              <span className="font-normal text-blue-700">
+              <span className="font-normal text-indigo-600 dark:text-indigo-300">
                 — total {protectedTotal.toFixed(1)}s
               </span>
             </p>
             <div className="space-y-1">
               {protectedRegions.map((region, idx) => (
-                <p key={idx} className="text-xs text-blue-700">
-                  Region {idx + 1}: {formatTime(region.start)} -{" "}
+                <p
+                  key={idx}
+                  className="text-xs tabular-nums text-indigo-600 dark:text-indigo-300"
+                >
+                  Region {idx + 1}: {formatTime(region.start)} –{" "}
                   {formatTime(region.end)}
                 </p>
               ))}
@@ -198,8 +203,8 @@ function ControlPanel({
 
         {/* Error Message */}
         {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-sm text-red-600">{error}</p>
+          <div className="rounded-2xl border border-red-300/60 bg-red-50/80 p-3 backdrop-blur-md dark:border-red-500/30 dark:bg-red-950/40">
+            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
           </div>
         )}
 
@@ -207,20 +212,18 @@ function ControlPanel({
         {(() => {
           const target = parseFloat(targetLength);
           const overProtected =
-            mode === "trim" &&
-            !isNaN(target) &&
-            protectedTotal > target;
+            mode === "trim" && !isNaN(target) && protectedTotal > target;
           return (
             <button
               type="submit"
               disabled={disabled || !targetLength || !mode || overProtected}
-              className="w-full px-6 py-3 bg-primary text-white font-semibold rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors shadow-md hover:shadow-lg"
+              className="btn-primary w-full"
             >
               {disabled
-                ? "Processing..."
+                ? "Processing…"
                 : overProtected
                   ? "Protected regions exceed target"
-                  : `Start Processing (${mode || "Enter target length"})`}
+                  : `Start Processing${mode ? ` · ${mode === "trim" ? "Trim" : "Extend"}` : ""}`}
             </button>
           );
         })()}

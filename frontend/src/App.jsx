@@ -5,6 +5,8 @@ import ControlPanel from "./components/ControlPanel";
 import ProcessingStatus from "./components/ProcessingStatus";
 import ResultsDisplay from "./components/ResultsDisplay";
 import RecentList from "./components/RecentList";
+import Logo from "./components/Logo";
+import ThemeToggle from "./components/ThemeToggle";
 import {
   processAudio,
   getStatus,
@@ -13,13 +15,30 @@ import {
   deleteJob,
 } from "./services/api";
 import useWebSocket from "./hooks/useWebSocket";
+import useTheme from "./hooks/useTheme";
 import {
   loadRecents,
   upsertRecent,
   removeRecent,
 } from "./utils/recentUploads";
 
+/** Soft, slowly drifting colour fields behind the frosted glass. */
+function AmbientBackground() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-0 -z-10 overflow-hidden"
+    >
+      <div className="absolute -left-32 -top-40 h-[42rem] w-[42rem] rounded-full bg-violet-400/30 blur-3xl animate-float dark:bg-violet-700/25" />
+      <div className="absolute -right-32 top-1/4 h-[38rem] w-[38rem] rounded-full bg-sky-400/30 blur-3xl animate-float [animation-delay:-5s] dark:bg-sky-700/20" />
+      <div className="absolute -bottom-48 left-1/4 h-[40rem] w-[40rem] rounded-full bg-indigo-400/25 blur-3xl animate-float [animation-delay:-10s] dark:bg-indigo-700/25" />
+    </div>
+  );
+}
+
 function App() {
+  const { isDark, toggleTheme } = useTheme();
+
   // State management
   const [stage, setStage] = useState("upload"); // upload, configure, processing, results
   const [uploadData, setUploadData] = useState(null);
@@ -47,7 +66,6 @@ function App() {
 
   // Handle upload complete
   const handleUploadComplete = (data) => {
-    console.log("Upload complete:", data);
     setUploadData(data);
     setStage("configure");
     setError(null);
@@ -55,7 +73,6 @@ function App() {
 
   // Handle region selection
   const handleRegionSelect = (regions) => {
-    console.log("Selected regions:", regions);
     setProtectedRegions(regions);
   };
 
@@ -98,7 +115,6 @@ function App() {
       const interval = setInterval(async () => {
         try {
           const status = await getStatus(jobId);
-          console.log("Status poll:", status);
 
           if (status.status === "completed") {
             clearInterval(interval);
@@ -143,7 +159,6 @@ function App() {
   // Handle WebSocket progress updates
   useEffect(() => {
     if (lastMessage && lastMessage.job_id === uploadData?.job_id) {
-      console.log("WebSocket update:", lastMessage);
       setProcessingProgress(lastMessage.progress);
       setProcessingMessage(lastMessage.message);
     }
@@ -239,45 +254,77 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="relative flex min-h-dvh flex-col">
+      <AmbientBackground />
+
       {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
+      <header className="sticky top-0 z-30 border-b border-white/40 bg-white/55 backdrop-blur-xl backdrop-saturate-150 transition-colors duration-300 dark:border-white/[0.06] dark:bg-[#05050c]/60">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl border border-white/60 bg-white/70 shadow-sm dark:border-white/10 dark:bg-white/[0.06]">
+              <Logo size={34} />
+            </span>
+            <div className="leading-tight">
+              <h1 className="bg-brand-gradient bg-clip-text font-display text-xl font-bold tracking-tight text-transparent sm:text-2xl">
                 Music Smart Trim
               </h1>
-              <p className="text-gray-600 mt-1">
+              <p className="hidden text-xs text-slate-500 dark:text-slate-400 sm:block">
                 Smart audio editing that preserves musical structure
               </p>
             </div>
+          </div>
+
+          <div className="flex items-center gap-2">
             {stage !== "upload" && (
               <button
                 onClick={handleStartOver}
-                className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
+                className="btn-ghost text-sm"
+                aria-label="Start over with a new file"
               >
-                ← Start Over
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                  />
+                </svg>
+                <span className="hidden sm:inline">Start Over</span>
               </button>
             )}
+            <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-800 font-semibold">Error</p>
-            <p className="text-red-600 text-sm mt-1">{error}</p>
+          <div className="mb-6 animate-fade-up rounded-2xl border border-red-300/60 bg-red-50/80 p-4 backdrop-blur-md dark:border-red-500/30 dark:bg-red-950/40">
+            <p className="font-semibold text-red-800 dark:text-red-300">Error</p>
+            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+              {error}
+            </p>
           </div>
         )}
 
         {/* Stage 1: Upload */}
         {stage === "upload" && (
-          <>
-            <div className="bg-white rounded-lg shadow-md p-8">
-              <h2 className="text-2xl font-semibold mb-6">Upload Audio File</h2>
+          <div className="animate-fade-up space-y-6">
+            <div className="glass-panel p-8">
+              <h2 className="mb-1 font-display text-2xl font-semibold text-slate-900 dark:text-white">
+                Upload your track
+              </h2>
+              <p className="mb-6 text-sm text-slate-500 dark:text-slate-400">
+                Drop in a song and we'll find a musical way to reach your target
+                length.
+              </p>
               <AudioUploader onUploadComplete={handleUploadComplete} />
             </div>
             <RecentList
@@ -285,19 +332,18 @@ function App() {
               onSelect={handleSelectRecent}
               onRemove={handleRemoveRecent}
             />
-          </>
+          </div>
         )}
 
         {/* Stage 2: Configure */}
         {stage === "configure" && uploadData && (
-          <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-xl font-semibold mb-4">Audio Waveform</h2>
+          <div className="animate-fade-up space-y-6">
+            <div className="glass-panel p-6">
+              <h2 className="mb-4 font-display text-xl font-semibold text-slate-900 dark:text-white">
+                Audio Waveform
+              </h2>
               <WaveformDisplay
-                audioUrl={getDownloadUrl(
-                  uploadData.job_id,
-                  uploadData.filename,
-                )}
+                audioUrl={getDownloadUrl(uploadData.job_id, uploadData.filename)}
                 onRegionSelect={handleRegionSelect}
                 protectedRegions={protectedRegions}
               />
@@ -312,40 +358,46 @@ function App() {
 
         {/* Stage 3: Processing */}
         {stage === "processing" && (
-          <ProcessingStatus
-            progress={processingProgress}
-            message={processingMessage}
-            visible={processing}
-          />
+          <div className="animate-fade-up">
+            <ProcessingStatus
+              progress={processingProgress}
+              message={processingMessage}
+              visible={processing}
+            />
+          </div>
         )}
 
         {/* Stage 4: Results */}
         {stage === "results" && results && (
-          <ResultsDisplay
-            results={results.outputs}
-            jobId={uploadData?.job_id}
-            onRegenerate={handleRegenerate}
-            onDownload={handleDownload}
-            onBackToConfigure={handleBackToConfigure}
-            strictLengthRequested={results.strict_length_requested === true}
-            strictLengthMet={results.strict_length_met === true}
-          />
+          <div className="animate-fade-up">
+            <ResultsDisplay
+              results={results.outputs}
+              jobId={uploadData?.job_id}
+              onRegenerate={handleRegenerate}
+              onDownload={handleDownload}
+              onBackToConfigure={handleBackToConfigure}
+              strictLengthRequested={results.strict_length_requested === true}
+              strictLengthMet={results.strict_length_met === true}
+            />
+          </div>
         )}
-
-        {/* WebSocket Status Indicator */}
-        <div className="fixed bottom-4 right-4 px-3 py-2 bg-white rounded-full shadow-lg text-xs">
-          <span
-            className={`inline-block w-2 h-2 rounded-full mr-2 ${
-              connected ? "bg-green-500" : "bg-red-500"
-            }`}
-          ></span>
-          {connected ? "Connected" : "Disconnected"}
-        </div>
       </main>
 
+      {/* WebSocket Status Indicator */}
+      <div className="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full border border-white/60 bg-white/70 px-3 py-2 text-xs font-medium text-slate-600 shadow-lg backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-slate-300">
+        <span
+          className={`inline-block h-2 w-2 rounded-full ${
+            connected
+              ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]"
+              : "bg-red-500"
+          }`}
+        ></span>
+        {connected ? "Connected" : "Disconnected"}
+      </div>
+
       {/* Footer */}
-      <footer className="mt-16 bg-white border-t border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 py-6 text-center text-gray-500 text-sm">
+      <footer className="border-t border-white/40 bg-white/40 backdrop-blur-md transition-colors duration-300 dark:border-white/[0.06] dark:bg-white/[0.02]">
+        <div className="mx-auto max-w-6xl px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400 sm:px-6">
           Music Smart Trim © 2026
         </div>
       </footer>

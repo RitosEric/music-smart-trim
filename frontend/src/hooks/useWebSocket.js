@@ -26,25 +26,18 @@ export function useWebSocket() {
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("WebSocket connected");
       if (!isCleanup) {
         setConnected(true);
       }
     });
 
     socket.on("disconnect", () => {
-      console.log("WebSocket disconnected");
       if (!isCleanup) {
         setConnected(false);
       }
     });
 
-    socket.on("connected", (data) => {
-      console.log("Server confirmed connection:", data);
-    });
-
     socket.on("progress_update", (data) => {
-      console.log("Progress update:", data);
       if (!isCleanup) {
         setLastMessage(data);
       }

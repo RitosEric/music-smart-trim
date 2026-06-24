@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
+import useTheme from "../hooks/useTheme";
 
 const COMMITTED_COLOR = "rgba(239, 68, 68, 0.3)"; // red — committed protected region
 const PENDING_COLOR = "rgba(234, 179, 8, 0.35)"; // amber — awaiting confirmation
@@ -11,9 +12,14 @@ function WaveformDisplay({
   protectedRegions = [],
   height = 128,
   readOnly = false,
-  waveColor = "#9ca3af",
-  progressColor = "#3b82f6",
+  waveColor = null,
+  progressColor = null,
 }) {
+  const { isDark } = useTheme();
+  // Theme-aware defaults; explicit props (e.g. result cards) still win.
+  const effWave = waveColor ?? (isDark ? "#475569" : "#cbd5e1");
+  const effProgress = progressColor ?? (isDark ? "#818cf8" : "#6366f1");
+  const effCursor = isDark ? "#a5b4fc" : "#4f46e5";
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
   const regionsPluginRef = useRef(null);
@@ -25,6 +31,26 @@ function WaveformDisplay({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // Hold the current colours in a ref so the WaveSurfer-creation effect can read
+  // them at mount without listing them as deps (which would tear down and reload
+  // the whole waveform on every theme toggle).
+  const colorsRef = useRef({ effWave, effProgress, effCursor });
+  useEffect(() => {
+    colorsRef.current = { effWave, effProgress, effCursor };
+    const ws = wavesurferRef.current;
+    if (ws) {
+      try {
+        ws.setOptions({
+          waveColor: effWave,
+          progressColor: effProgress,
+          cursorColor: effCursor,
+        });
+      } catch (e) {
+        /* instance may be mid-teardown */
+      }
+    }
+  }, [effWave, effProgress, effCursor]);
 
   // Keep latest onRegionSelect in a ref so the effect below doesn't re-run
   // whenever the parent re-renders (the callback identity changes each render).
@@ -45,9 +71,9 @@ function WaveformDisplay({
 
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
-      waveColor,
-      progressColor,
-      cursorColor: "#1e40af",
+      waveColor: colorsRef.current.effWave,
+      progressColor: colorsRef.current.effProgress,
+      cursorColor: colorsRef.current.effCursor,
       barWidth: 2,
       barRadius: 3,
       cursorWidth: 2,
@@ -126,7 +152,10 @@ function WaveformDisplay({
       }
       pendingRegionRef.current = null;
     };
-  }, [audioUrl, height, readOnly, waveColor, progressColor]);
+    // Colours are applied imperatively via setOptions (see colorsRef effect),
+    // so they're intentionally excluded here to avoid reloading on theme change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioUrl, height, readOnly]);
 
   // Sync committed regions from the parent prop into WaveSurfer. The pending
   // region (if any) is preserved across this sync.
@@ -209,8 +238,8 @@ function WaveformDisplay({
   return (
     <div className="w-full">
       {loading && (
-        <div className="flex items-center justify-center h-32 bg-gray-100 rounded-lg">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <div className="flex h-32 items-center justify-center rounded-2xl bg-slate-100/60 dark:bg-white/[0.04]">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-500 dark:border-white/10 dark:border-t-indigo-400"></div>
         </div>
       )}
 
@@ -222,7 +251,8 @@ function WaveformDisplay({
           <div className="flex items-center justify-between">
             <button
               onClick={togglePlayPause}
-              className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
+              aria-label={isPlaying ? "Pause" : "Play"}
+              className="btn-primary px-4 py-2 text-sm"
             >
               {isPlaying ? (
                 <>
@@ -257,7 +287,7 @@ function WaveformDisplay({
               )}
             </button>
 
-            <div className="text-sm text-gray-600">
+            <div className="text-sm tabular-nums text-slate-500 dark:text-slate-400">
               {formatTime(currentTime)} / {formatTime(duration)}
             </div>
           </div>
@@ -265,43 +295,45 @@ function WaveformDisplay({
           {/* Region controls — hidden for read-only (result-card) waveforms */}
           {!readOnly && (
             <div className="space-y-3">
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   onClick={startNewRegion}
                   disabled={Boolean(pendingRange)}
-                  className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
+                  className="btn-ghost px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Add Protected Region
                 </button>
                 <button
                   onClick={clearAll}
-                  className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors text-sm"
+                  className="btn-ghost px-3 py-1.5 text-sm"
                 >
                   Clear All
                 </button>
-                <span className="text-xs text-gray-500">
-                  Drag on the waveform to draw a region. Resize it, then press Confirm.
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Drag on the waveform to draw a region. Resize it, then press
+                  Confirm.
                 </span>
               </div>
 
               {pendingRange && (
-                <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded">
-                  <div className="flex-1 text-sm text-amber-900">
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-300/60 bg-amber-50/80 p-3 backdrop-blur-md dark:border-amber-400/30 dark:bg-amber-500/10">
+                  <div className="flex-1 text-sm text-amber-900 dark:text-amber-200">
                     <span className="font-semibold">Pending region:</span>{" "}
-                    {formatTime(pendingRange.start)} – {formatTime(pendingRange.end)}{" "}
-                    <span className="text-amber-700">
+                    {formatTime(pendingRange.start)} –{" "}
+                    {formatTime(pendingRange.end)}{" "}
+                    <span className="tabular-nums text-amber-700 dark:text-amber-300/80">
                       ({(pendingRange.end - pendingRange.start).toFixed(1)}s)
                     </span>
                   </div>
                   <button
                     onClick={confirmPending}
-                    className="px-3 py-1.5 bg-primary text-white rounded hover:bg-blue-600 transition-colors text-sm font-medium"
+                    className="btn-primary px-3 py-1.5 text-sm"
                   >
                     Confirm Region
                   </button>
                   <button
                     onClick={cancelPending}
-                    className="px-3 py-1.5 bg-white text-gray-700 border border-gray-300 rounded hover:bg-gray-50 transition-colors text-sm"
+                    className="btn-ghost px-3 py-1.5 text-sm"
                   >
                     Cancel
                   </button>
