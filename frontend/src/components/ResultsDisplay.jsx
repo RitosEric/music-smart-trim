@@ -12,7 +12,7 @@ function ResultCard({ result, jobId, rank, isPrimary = false, onDownload }) {
         "rounded-lg border-2 p-6 transition-all duration-200 " +
         (isPrimary
           ? "border-primary bg-blue-50 shadow-lg"
-          : "border-gray-200 bg-gray-50")
+          : "border-gray-300 bg-gray-100 opacity-75")
       }
     >
       <div className="flex items-start justify-between mb-4">
@@ -84,7 +84,12 @@ function ResultCard({ result, jobId, rank, isPrimary = false, onDownload }) {
         <p className="text-xs text-gray-500">{result.filename}</p>
         <button
           onClick={() => onDownload(result.filename)}
-          className="px-3 py-1.5 text-sm text-gray-600 hover:text-primary border border-gray-300 rounded hover:border-primary transition-colors flex items-center gap-1"
+          className={
+            "px-3 py-1.5 text-sm border rounded transition-colors flex items-center gap-1 " +
+            (isPrimary
+              ? "text-gray-600 hover:text-primary border-gray-300 hover:border-primary"
+              : "text-gray-500 hover:text-gray-700 border-gray-400 hover:border-gray-600")
+          }
           title="Download"
         >
           <svg
@@ -202,8 +207,9 @@ function ResultsDisplay({
 
       <div className="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-2">
         <p className="text-sm text-gray-600">
-          Results are ranked by quality score. Play each option, then download
-          the version you like — or regenerate for different cuts.
+          Showing top 3 results out of 5 strategies, ranked by quality score.
+          The best result is highlighted. Play each option, then download
+          the version you like — or click Regenerate for 3 different variations.
         </p>
         <p className="text-sm text-gray-500">
           <span className="font-medium text-gray-700">Heads up:</span> some

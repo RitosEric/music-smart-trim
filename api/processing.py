@@ -88,10 +88,11 @@ def process_audio(
         if progress_callback:
             progress_callback("Generating outputs...", 80)
 
-        # Format response
+        # Format response - return only top 3 out of 5 strategies
         strategies = result.get('strategies', [])
         outputs = []
-        for i, (score, output_file) in enumerate(zip(result['scores'], result['output_files'])):
+        # Take only the top 3 results (they're already sorted by score)
+        for i, (score, output_file) in enumerate(zip(result['scores'][:3], result['output_files'][:3])):
             strategy_name = strategies[i].name if i < len(strategies) else None
             outputs.append({
                 'rank': i + 1,
