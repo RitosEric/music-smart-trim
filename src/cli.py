@@ -84,10 +84,11 @@ def retry_for_quality(
     structure: Dict,
     audio_data,
     sample_rate: int,
-    use_mert: bool,
     regenerate_seed: Optional[int],
     mode: str,
     min_segment_duration: float = 10.0,
+    protected_regions: Optional[List[Tuple[float, float]]] = None,
+    protect_ends: bool = True,
     progress_callback: Optional[Callable[[str, int], None]] = None,
 ) -> Tuple[List, List]:
     """
@@ -101,7 +102,6 @@ def retry_for_quality(
         structure: Music structure
         audio_data: Audio data array
         sample_rate: Sample rate
-        use_mert: Whether to use MERT embeddings
         regenerate_seed: Current regeneration seed (None for first run)
         mode: Processing mode ("trim" or "extend")
         progress_callback: Optional callback (message, percent) emitted on each
@@ -150,13 +150,19 @@ def retry_for_quality(
                 downbeats=structure['beat_info']['downbeats'],
                 regenerate_seed=retry_seed,
                 num_strategies=10,
-                min_segment_duration=min_segment_duration
+                min_segment_duration=min_segment_duration,
+                protected_regions=protected_regions,
+                protect_ends=protect_ends,
             )
 
             scored_strategies = []
             for strategy in all_strategies:
                 rendered_audio = render_strategy(strategy, audio_data, sample_rate)
-                score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
+                score = score_strategy(
+                    strategy, audio_data, sample_rate, original_length, rendered_audio,
+                    downbeats=structure['beat_info']['downbeats'],
+                    sections=structure['sections'],
+                )
                 scored_strategies.append({
                     'strategy': strategy,
                     'score': score,
@@ -215,20 +221,30 @@ def retry_for_strict_length(
     structure: Dict,
     audio_data,
     sample_rate: int,
-    use_mert: bool,
     regenerate_seed: Optional[int],
     mode: str,
     min_segment_duration: float = 10.0,
+    protected_regions: Optional[List[Tuple[float, float]]] = None,
+    protect_ends: bool = True,
     progress_callback: Optional[Callable[[str, int], None]] = None,
 ) -> Tuple[List, List, bool]:
     """
-    Enforce ±STRICT_LENGTH_TOLERANCE on the returned strategies.
+    Enforce ±STRICT_LENGTH_TOLERANCE on the returned strategies by ESCALATION.
 
-    First applies a hard length filter to the initial scored strategies. If any
-    pass, returns up to the top 3 of those (ranked by quality). Otherwise
-    regenerates with fresh seeds up to MAX_STRICT_RETRIES times. On total
-    failure returns the closest-to-target top 3 from all attempts, flagged as
-    not met.
+    The rewritten engine is deterministic, so reseeding it returns the same
+    finite set of plans — useless for chasing a tight length. Instead, each
+    batch widens the search so closer (if rougher) edits become reachable:
+
+      - Trim: raise the cut budget (``max_cuts``), admitting more-fragmented
+        cuts that can land nearer the target.
+      - Extend: enumerate every repeat count per section
+        (``all_repeat_counts``) and raise the cap, giving a finer length ladder.
+
+    Each batch scores its candidates, keeps any within ±tolerance, and returns
+    the best-sounding compliant one immediately. After ``MAX_STRICT_RETRIES``
+    batches with no compliant option, the closest-to-target options are returned
+    flagged as not met. A progress message fires every batch so the UI shows the
+    extra work instead of an apparently frozen run.
 
     Returns:
         Tuple of (strategies, scores, strict_met) — strict_met is True when
@@ -237,8 +253,7 @@ def retry_for_strict_length(
     from src.output_generator import render_strategy
 
     all_seen = list(scored_strategies)
-    compliant = _apply_strict_length_filter(scored_strategies, target_length)
-
+    compliant = _apply_strict_length_filter(all_seen, target_length)
     if compliant:
         compliant.sort(key=lambda s: s['score']['star_rating'], reverse=True)
         top = compliant[:3]
@@ -249,22 +264,26 @@ def retry_for_strict_length(
         )
 
     intro = (
-        f"Strict length not met (±{STRICT_LENGTH_TOLERANCE:.0f}s of {target_length:.1f}s) "
-        "— retrying with new seeds..."
+        f"Output is outside ±{STRICT_LENGTH_TOLERANCE:.0f}s of {target_length:.1f}s "
+        "— still processing: refining the edit to meet your length..."
     )
     print(intro)
     if progress_callback:
         progress_callback(intro, 50)
 
-    # The initial run may have used regenerate_seed=None or a user-provided seed.
-    # Use seeds 1..N here so retries are deterministic per run.
-    for retry_idx in range(1, MAX_STRICT_RETRIES + 1):
-        message = f"Strict length not met — retrying with new seeds ({retry_idx}/{MAX_STRICT_RETRIES})..."
+    for batch in range(1, MAX_STRICT_RETRIES + 1):
+        # Escalate the search each batch. Trim raises the cut budget; extend
+        # ladders the repeat counts and raises the cap.
+        max_cuts = 2 + batch                    # 3, 4, 5, 6, 7
+        max_repeats = 4 + batch                 # 5, 6, 7, 8, 9
+        message = (
+            f"Still processing — refining to stay within ±{STRICT_LENGTH_TOLERANCE:.0f}s "
+            f"(attempt {batch}/{MAX_STRICT_RETRIES})..."
+        )
         print(f"\n{message}")
         if progress_callback:
-            # 55, 60, 65, 70, 75 — same range the quality-retry loop uses,
-            # so the bar advances monotonically before "Generating outputs..." at 90.
-            progress_callback(message, 50 + retry_idx * 5)
+            # 55, 60, 65, 70, 75 — monotonic, below the 90% output-gen milestone.
+            progress_callback(message, 50 + batch * 5)
 
         retry_strategies = generate_strategies(
             mode=mode,
@@ -273,16 +292,23 @@ def retry_for_strict_length(
             target_length=target_length,
             sections=structure['sections'],
             downbeats=structure['beat_info']['downbeats'],
-            regenerate_seed=retry_idx,
-            num_strategies=5,
+            regenerate_seed=regenerate_seed,
+            num_strategies=50,                  # surface the whole length ladder
             min_segment_duration=min_segment_duration,
+            protected_regions=protected_regions,
+            protect_ends=protect_ends,
+            max_cuts=max_cuts,
+            max_repeats=max_repeats,
+            all_repeat_counts=(mode == "extend"),
         )
 
         for strategy in retry_strategies:
             rendered = render_strategy(strategy, audio_data, sample_rate)
             score = score_strategy(
                 strategy, audio_data, sample_rate,
-                original_length, rendered, use_mert=use_mert,
+                original_length, rendered,
+                downbeats=structure['beat_info']['downbeats'],
+                sections=structure['sections'],
             )
             all_seen.append({'strategy': strategy, 'score': score, 'rendered_audio': rendered})
 
@@ -290,7 +316,7 @@ def retry_for_strict_length(
         if compliant:
             compliant.sort(key=lambda s: s['score']['star_rating'], reverse=True)
             top = compliant[:3]
-            print(f"Found {len(compliant)} compliant strategies on retry {retry_idx}.")
+            print(f"Found {len(compliant)} compliant strategies on attempt {batch}.")
             return (
                 [s['strategy'] for s in top],
                 [s['score'] for s in top],
@@ -298,7 +324,7 @@ def retry_for_strict_length(
             )
 
     print(
-        f"Strict length could not be met after {MAX_STRICT_RETRIES} retries; "
+        f"Strict length could not be met after {MAX_STRICT_RETRIES} attempts; "
         "returning closest available options."
     )
     fallback = _select_closest(all_seen, target_length, count=3)
@@ -315,7 +341,6 @@ def run_pipeline(
     protected_regions: List[str],
     output_dir: Path,
     regenerate_seed: Optional[int] = None,
-    use_mert: bool = False,
     excluded_strategies: Optional[List[str]] = None,
     auto_protect: bool = False,
     min_segment_duration: float = 10.0,
@@ -352,7 +377,6 @@ def run_pipeline(
         protected_regions: List of protected region strings in "MM:SS-MM:SS" format
         output_dir: Directory to save output files
         regenerate_seed: Optional seed for regeneration (None for first run)
-        use_mert: Whether to use MERT embeddings for quality scoring (slower but better)
         excluded_strategies: List of strategy names to exclude (for regeneration)
         auto_protect: Whether to automatically protect intro/outro (default: False)
 
@@ -410,6 +434,8 @@ def run_pipeline(
     mode = "trim" if target_length < original_length else "extend"
     print(f"\nMode: {mode.upper()} ({original_length:.1f}s → {target_length:.1f}s)")
 
+    # The auto-protect toggle drives whether the engine may cut the intro/outro;
+    # parsed protected regions (user-marked + auto intro/outro) are honored too.
     print(f"Generating 5 diverse {mode} strategies...")
     all_strategies = generate_strategies(
         mode=mode,
@@ -420,7 +446,9 @@ def run_pipeline(
         downbeats=structure['beat_info']['downbeats'],
         regenerate_seed=regenerate_seed,
         num_strategies=5,
-        min_segment_duration=min_segment_duration
+        min_segment_duration=min_segment_duration,
+        protected_regions=protected_regions_parsed,
+        protect_ends=auto_protect,
     )
     print(f"Generated {len(all_strategies)} strategies")
 
@@ -440,16 +468,19 @@ def run_pipeline(
 
     # Stage 5: Render and score ALL strategies
     print("Scoring all strategies...")
-    if use_mert:
-        print("  Using MERT embeddings for enhanced quality scoring...")
     from src.output_generator import render_strategy
 
     scored_strategies = []
     for strategy in all_strategies:
         # Render the strategy to get actual output
         rendered_audio = render_strategy(strategy, audio_data, sample_rate)
-        # Score based on rendered output (with optional MERT)
-        score = score_strategy(strategy, audio_data, sample_rate, original_length, rendered_audio, use_mert=use_mert)
+        # Score based on rendered output, passing structure so the scorer can
+        # reward downbeat- and section-aligned boundaries.
+        score = score_strategy(
+            strategy, audio_data, sample_rate, original_length, rendered_audio,
+            downbeats=structure['beat_info']['downbeats'],
+            sections=structure['sections'],
+        )
         scored_strategies.append({
             'strategy': strategy,
             'score': score,
@@ -470,14 +501,16 @@ def run_pipeline(
     if strict_length:
         strategies, scores, strict_length_met = retry_for_strict_length(
             scored_strategies, clusters, original_length, target_length,
-            structure, audio_data, sample_rate, use_mert, regenerate_seed, mode,
-            min_segment_duration, progress_callback=progress_callback,
+            structure, audio_data, sample_rate, regenerate_seed, mode,
+            min_segment_duration, protected_regions=protected_regions_parsed,
+            protect_ends=auto_protect, progress_callback=progress_callback,
         )
     else:
         strategies, scores = retry_for_quality(
             scored_strategies, clusters, original_length, target_length,
-            structure, audio_data, sample_rate, use_mert, regenerate_seed, mode,
-            min_segment_duration, progress_callback=progress_callback,
+            structure, audio_data, sample_rate, regenerate_seed, mode,
+            min_segment_duration, protected_regions=protected_regions_parsed,
+            protect_ends=auto_protect, progress_callback=progress_callback,
         )
         strict_length_met = False  # not applicable when strict mode is off
 
@@ -563,12 +596,6 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        '--use-mert',
-        action='store_true',
-        help='Use MERT embeddings for enhanced quality scoring (slower but better quality assessment)'
-    )
-
-    parser.add_argument(
         '--auto-protect',
         action='store_true',
         help='Enable automatic intro/outro protection (prevents cutting from first/last 10%% or 15s)'
@@ -644,7 +671,6 @@ def main():
     print(f"Protected regions: {args.protect if args.protect else 'None'}")
     print(f"Auto-protect intro/outro: {'Yes' if args.auto_protect else 'No'}")
     print(f"Output directory: {args.output_dir}")
-    print(f"MERT embeddings: {'Enabled' if args.use_mert else 'Disabled'}")
     print(f"Strict length (±{int(STRICT_LENGTH_TOLERANCE)}s): {'Enabled' if args.strict_length else 'Disabled'}")
     print("=" * 60)
     print("=" * 60 + "\n")
@@ -660,7 +686,6 @@ def main():
             protected_regions=args.protect,
             output_dir=args.output_dir,
             regenerate_seed=None,
-            use_mert=args.use_mert,
             excluded_strategies=None,
             auto_protect=args.auto_protect,
             min_segment_duration=args.min_segment_duration,
@@ -693,7 +718,6 @@ def main():
                     protected_regions=args.protect,
                     output_dir=args.output_dir,
                     regenerate_seed=regenerate_count,
-                    use_mert=args.use_mert,
                     excluded_strategies=excluded_strategies,
                     auto_protect=args.auto_protect,
                     min_segment_duration=args.min_segment_duration,

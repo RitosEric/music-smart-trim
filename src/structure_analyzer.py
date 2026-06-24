@@ -5,9 +5,51 @@ import numpy as np
 from typing import List, Dict, Tuple
 
 
+def _downbeats_via_madmom(audio_data: np.ndarray, sr: int):
+    """Detect downbeats with madmom's DBN tracker, or return None if unavailable.
+
+    madmom's neural downbeat tracker locates true bar lines far more reliably
+    than grouping librosa beats into fixed 4-beat bars — which matters because
+    every cut and loop endpoint snaps to a downbeat. It is an *optional*
+    dependency, though: madmom 0.16.x does not run on Python 3.12 (it imports
+    the removed ``pkg_resources`` and ``collections.MutableSequence``). Any
+    import or runtime failure returns None so the caller falls back to the
+    librosa estimate; on a compatible interpreter (Python <= 3.11) the better
+    detector is used automatically with no code change.
+    """
+    try:
+        from madmom.features.downbeats import (
+            RNNDownBeatProcessor,
+            DBNDownBeatTrackingProcessor,
+        )
+        from madmom.audio.signal import Signal
+    except Exception:
+        return None
+    try:
+        signal = Signal(
+            np.asarray(audio_data, dtype=np.float32),
+            sample_rate=sr,
+            num_channels=1,
+        )
+        activations = RNNDownBeatProcessor()(signal)
+        tracker = DBNDownBeatTrackingProcessor(beats_per_bar=[3, 4], fps=100)
+        beats = tracker(activations)  # rows of [time, beat_position_in_bar]
+        downbeats = np.asarray(
+            [time for time, position in beats if int(position) == 1], dtype=float
+        )
+        return downbeats if downbeats.size > 0 else None
+    except Exception:
+        return None
+
+
 def detect_beats_and_bars(audio_data: np.ndarray, sr: int, time_signature: int = 4) -> Dict:
     """
     Detect beats and bar boundaries for beat-aligned editing.
+
+    Downbeats come from madmom when it is installed and working; otherwise they
+    are estimated by grouping librosa beats into bars of ``time_signature``
+    beats. Cuts and loops snap to these downbeats, so better downbeats mean
+    cleaner edits.
 
     Args:
         audio_data: Audio signal as numpy array
@@ -17,7 +59,7 @@ def detect_beats_and_bars(audio_data: np.ndarray, sr: int, time_signature: int =
     Returns:
         Dict with tempo, beats, and downbeats (bar boundaries)
     """
-    # Detect tempo and beats
+    # Detect tempo and beats (librosa is always available).
     tempo, beat_frames = librosa.beat.beat_track(y=audio_data, sr=sr)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
 
@@ -27,10 +69,11 @@ def detect_beats_and_bars(audio_data: np.ndarray, sr: int, time_signature: int =
     else:
         tempo = float(tempo)
 
-    # Estimate downbeats (first beat of each bar)
-    # Group beats into bars based on time signature
-    downbeat_indices = list(range(0, len(beat_times), time_signature))
-    downbeats = beat_times[downbeat_indices]
+    # Prefer madmom's downbeats; fall back to grouping beats into bars.
+    downbeats = _downbeats_via_madmom(audio_data, sr)
+    if downbeats is None:
+        downbeat_indices = list(range(0, len(beat_times), time_signature))
+        downbeats = beat_times[downbeat_indices]
 
     return {
         'tempo': tempo,
@@ -73,15 +116,49 @@ def detect_structure_boundaries(audio_data: np.ndarray, sr: int) -> np.ndarray:
     S = librosa.feature.melspectrogram(y=audio_data, sr=sr, n_mels=128)
     S_db = librosa.power_to_db(S, ref=np.max)
 
-    # Use librosa's agglomerative clustering for segmentation with k parameter
-    # Set k to estimate number of sections based on song length
+    # Use librosa's agglomerative clustering for segmentation with k parameter.
+    # Aim for roughly one section per 20s (min 6) so even short songs yield
+    # enough interior sections for the planner to choose from.
     duration = len(audio_data) / sr
-    k = max(4, int(duration / 30))  # Roughly one section per 30 seconds
+    k = max(6, int(duration / 20))
 
     boundaries = librosa.segment.agglomerative(S_db, k=k)
     boundary_times = librosa.frames_to_time(boundaries, sr=sr)
 
+    # agglomerative returns segment *start* frames, so the final segment (last
+    # boundary → end of song) would otherwise be dropped, hiding the song's
+    # tail from the planner. Force the boundary set to span [0, duration].
+    boundary_times = np.concatenate(([0.0], boundary_times, [duration]))
+    boundary_times = np.unique(np.round(boundary_times, 3))
+
     return boundary_times
+
+
+def count_section_repetitions(
+    section_chromas: List[np.ndarray],
+    similarity_threshold: float = 0.85,
+) -> List[int]:
+    """Count, per section, how many other sections share its harmonic content.
+
+    Each input is a section's (mean) chroma vector. Two sections "repeat" when
+    their cosine similarity meets ``similarity_threshold``. The returned count
+    is the direct, robust signal of repetition that distinguishes repeated
+    sections (verse/chorus) from one-off sections (bridge) — replacing the old
+    repeated-segment overlap heuristic.
+    """
+    vecs = [np.asarray(v, dtype=float) for v in section_chromas]
+    norms = [float(np.linalg.norm(v)) for v in vecs]
+    counts = []
+    for i in range(len(vecs)):
+        c = 0
+        for j in range(len(vecs)):
+            if i == j or norms[i] < 1e-9 or norms[j] < 1e-9:
+                continue
+            cos = float(np.dot(vecs[i], vecs[j]) / (norms[i] * norms[j]))
+            if cos >= similarity_threshold:
+                c += 1
+        counts.append(c)
+    return counts
 
 
 def label_sections(
@@ -130,30 +207,19 @@ def label_sections(
     intro_threshold = 10.0
     outro_start = duration - 10.0
 
-    # Build repetition map from repeated_segments if provided
-    repetition_map = {}
-    if repeated_segments:
-        # For each section boundary, count overlapping repeated segments
-        for i in range(len(boundaries) - 1):
-            start = float(boundaries[i])
-            end = float(boundaries[i + 1])
-            overlap_count = 0
-
-            for seg_dict in repeated_segments:
-                # Each repeated segment has start_time_1, start_time_2, duration
-                seg1_start = seg_dict['start_time_1']
-                seg1_end = seg1_start + seg_dict['duration']
-                seg2_start = seg_dict['start_time_2']
-                seg2_end = seg2_start + seg_dict['duration']
-
-                # Check if either occurrence overlaps with this section
-                overlap1 = not (seg1_end <= start or seg1_start >= end)
-                overlap2 = not (seg2_end <= start or seg2_start >= end)
-
-                if overlap1 or overlap2:
-                    overlap_count += 1
-
-            repetition_map[i] = overlap_count
+    # How often each section repeats elsewhere in the song, measured directly
+    # from harmonic content: count the other sections whose mean chroma matches.
+    # This replaces a brittle overlap-count//100 heuristic that collapsed to
+    # noise on real songs. ``repeated_segments`` is no longer needed for this.
+    section_mean_chromas = []
+    for i in range(len(boundaries) - 1):
+        sf = librosa.time_to_frames(float(boundaries[i]), sr=sr)
+        ef = librosa.time_to_frames(float(boundaries[i + 1]), sr=sr)
+        seg = chroma[:, sf:ef]
+        section_mean_chromas.append(
+            seg.mean(axis=1) if seg.shape[1] > 0 else np.zeros(chroma.shape[0])
+        )
+    repetition_counts = count_section_repetitions(section_mean_chromas, similarity_threshold=0.9)
 
     for i in range(len(boundaries) - 1):
         start_time = float(boundaries[i])
@@ -175,44 +241,24 @@ def label_sections(
         is_high_energy = avg_energy > energy_threshold
         is_bright = avg_brightness > centroid_threshold
 
-        # Get repetition count from map or fallback to old method
-        if repeated_segments and i in repetition_map:
-            repetition_count = min(repetition_map[i] // 100, 10)  # Normalize (5132 segments → ~0-10 scale)
-        else:
-            # Fallback: compare to other sections
-            repetition_count = 0
-            for j in range(len(boundaries) - 1):
-                if i == j:
-                    continue
+        repetition_count = repetition_counts[i]
 
-                other_start = librosa.time_to_frames(float(boundaries[j]), sr=sr)
-                other_end = librosa.time_to_frames(float(boundaries[j + 1]), sr=sr)
-                other_chroma = chroma[:, other_start:other_end]
-
-                similarity = compute_chroma_similarity(segment_chroma, other_chroma)
-                if similarity > 0.75:  # High similarity threshold
-                    repetition_count += 1
-
-        # Multi-feature classification
+        # Multi-feature classification. A chorus is the *repeated, loud* section;
+        # a verse repeats but is not the energetic hook; a bridge is a one-off.
+        # The duration window is generous (8-45s) so real choruses outside the
+        # old rigid 12-30s band are still caught.
         if start_time < intro_threshold:
             label = "intro"
         elif start_time >= outro_start:
             label = "outro"
-        elif (repetition_count >= 2 and is_high_energy and is_bright and
-              12.0 <= section_duration <= 30.0):
-            label = "chorus"  # Repeated + high energy + bright + short = chorus
-        elif (repetition_count >= 1 and 25.0 <= section_duration <= 60.0):
-            label = "verse"  # Some repetition + longer duration = verse
-        elif repetition_count == 0 and section_duration < 25.0:
-            label = "bridge"  # No repetition + short = bridge
+        elif repetition_count >= 1 and is_high_energy and 8.0 <= section_duration <= 45.0:
+            label = "chorus"   # repeated + high energy = the hook
+        elif repetition_count >= 1:
+            label = "verse"    # repeated but not the loud hook
+        elif section_duration < 30.0:
+            label = "bridge"   # unique, shortish
         else:
-            # Fallback: use energy + duration
-            if is_high_energy and section_duration < 25.0:
-                label = "chorus"
-            elif section_duration >= 25.0:
-                label = "verse"
-            else:
-                label = "bridge"
+            label = "verse"    # long one-off → treat as a verse
 
         sections.append({
             'start': float(start_time),
@@ -281,31 +327,6 @@ def analyze_structure(audio_data: np.ndarray, sr: int, chroma: np.ndarray, repea
 
     # Label sections (V2: now integrates repeated_segments)
     sections = label_sections(audio_data, sr, boundaries, chroma, repeated_segments)
-
-    return {
-        'beat_info': beat_info,
-        'boundaries': boundaries,
-        'sections': sections
-    }
-    """
-    Complete structure analysis: beats, bars, boundaries, and section labels.
-
-    Args:
-        audio_data: Audio signal
-        sr: Sample rate
-        chroma: Pre-computed chroma features
-
-    Returns:
-        Dict with beat_info, boundaries, and sections
-    """
-    # Detect beats and bars
-    beat_info = detect_beats_and_bars(audio_data, sr)
-
-    # Detect structural boundaries
-    boundaries = detect_structure_boundaries(audio_data, sr)
-
-    # Label sections
-    sections = label_sections(audio_data, sr, boundaries, chroma)
 
     return {
         'beat_info': beat_info,

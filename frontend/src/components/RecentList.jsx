@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { getDownloadUrl } from "../services/api";
 import { formatTime } from "../utils/formatters";
+import { MAX_RECENT } from "../utils/recentUploads";
 
 function CoverThumb({ jobId, coverFilename, filename }) {
   const [errored, setErrored] = useState(false);
@@ -38,9 +39,13 @@ function RecentList({ recents, onSelect, onRemove }) {
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6 mt-6">
-      <h2 className="text-lg font-semibold mb-4 text-gray-800">
+      <h2 className="text-lg font-semibold mb-1 text-gray-800">
         Recent uploads
       </h2>
+      <p className="text-xs text-gray-400 mb-4">
+        Only your {MAX_RECENT} most recent uploads are kept — older ones are
+        removed automatically to save storage.
+      </p>
       <ul className="space-y-2">
         {recents.map((r) => (
           <li

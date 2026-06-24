@@ -5,3 +5,13 @@ scipy>=1.10.0
 soundfile>=0.12.0
 pytest>=7.0.0
 pyloudnorm>=0.1.0
+
+# Optional: better downbeat detection (madmom DBNDownBeatTracker). Cuts/loops
+# snap to downbeats, so madmom improves edit alignment. The engine falls back
+# to a librosa bar-grouping estimate when madmom is absent or fails to load.
+# NOTE: madmom 0.16.x does NOT run on Python 3.12 (it imports the removed
+# pkg_resources and collections.MutableSequence). Use Python <= 3.11 to enable
+# it; install needs build tooling:
+#   pip install Cython numpy "setuptools<81"
+#   pip install --no-build-isolation madmom
+madmom>=0.16.1; python_version < "3.12"

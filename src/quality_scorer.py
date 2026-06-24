@@ -1,1062 +1,280 @@
-"""Quality scorer module for rating trim strategies with enhanced heuristics and MERT embeddings."""
+"""Unified quality scorer for trim and extend edits.
 
-from typing import Dict, List, Tuple, Optional
+The previous scorer used two different rubrics — one for trims (musical
+coherence + transition smoothness + length) and another for extends (loop
+naturalness + loop transitions + length) — with different component scales and
+rescale factors. A 4-star trim and a 4-star extend therefore did not mean the
+same thing, and the rescale arithmetic was fragile.
+
+This rewrite scores every edit, trim or extend, on one 100-point rubric built
+from the signals the music-structure-analysis literature finds most predictive
+of a clean splice:
+
+    beat alignment      30   do the edit boundaries land on downbeats?
+    harmonic continuity 25   does the chroma match across each join?
+    structural position 20   do the boundaries sit on section edges?
+    energy continuity   15   is there a loudness jump across a join?
+    length accuracy     10   how close to the requested duration?
+                       ----
+                        100
+
+The 100-point base is then multiplied by a cut-count penalty so a clean
+single splice always outranks a fragmented multi-cut edit of equal raw score.
+The total maps linearly to a 0-5 star rating (20 points per star).
+
+A "join" is the seam an edit creates: for a trim it is the moment the audio
+before the cut meets the audio after it; for an extend it is the loop wrap
+(end of a repeated section meeting its own start). Both are evaluated on the
+original audio, where the two sides of every seam still exist.
+"""
 import numpy as np
-import librosa
-from src.trim_engine import TrimStrategy
-
-# Optional MERT support
-_MERT_AVAILABLE = False
-_MERT_MODEL = None
-_MERT_PROCESSOR = None
-
-try:
-    from transformers import Wav2Vec2FeatureExtractor, AutoModel
-    import torch
-    _MERT_AVAILABLE = True
-except ImportError:
-    pass
-
-
-def load_mert_model(device="cpu"):
-    """
-    Load MERT model for embeddings (lazy loading).
-
-    Args:
-        device: Device to load model on ("cpu" or "cuda")
-
-    Returns:
-        Tuple of (model, processor) or (None, None) if unavailable
-    """
-    global _MERT_MODEL, _MERT_PROCESSOR
-
-    if not _MERT_AVAILABLE:
-        return None, None
-
-    if _MERT_MODEL is None:
-        try:
-            print("Loading MERT model (first time only, ~360MB)...")
-            _MERT_MODEL = AutoModel.from_pretrained("m-a-p/MERT-v1-95M", trust_remote_code=True)
-            _MERT_PROCESSOR = Wav2Vec2FeatureExtractor.from_pretrained("m-a-p/MERT-v1-95M", trust_remote_code=True)
-            _MERT_MODEL = _MERT_MODEL.to(device)
-            if device == "cpu":
-                # Use FP32 on CPU
-                pass
-            else:
-                # Use FP16 on GPU for speed
-                _MERT_MODEL = _MERT_MODEL.half()
-            _MERT_MODEL.eval()
-            print("✓ MERT model loaded")
-        except Exception as e:
-            print(f"⚠️  Failed to load MERT: {e}")
-            return None, None
-
-    return _MERT_MODEL, _MERT_PROCESSOR
-
-
-def get_mert_embeddings(audio: np.ndarray, sr: int, device="cpu") -> Optional[np.ndarray]:
-    """
-    Extract MERT embeddings for audio segment.
-
-    Args:
-        audio: Audio signal
-        sr: Sample rate
-        device: Device for inference
-
-    Returns:
-        Embeddings array or None if MERT unavailable
-    """
-    model, processor = load_mert_model(device)
-
-    if model is None:
-        return None
-
-    try:
-        # Resample to 24kHz if needed
-        if sr != 24000:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=24000)
-
-        # Process audio
-        inputs = processor(audio, sampling_rate=24000, return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        # Get embeddings
-        with torch.no_grad():
-            outputs = model(**inputs)
-            # Use mean pooling over time dimension
-            embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy()
-
-        return embeddings
-    except Exception as e:
-        print(f"⚠️  MERT embedding extraction failed: {e}")
-        return None
-
-
-def score_spectral_flux(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]) -> float:
-    """
-    Score spectral flux (smoothness of frequency changes at cuts).
-
-    Lower spectral flux at cut points = smoother transitions.
-
-    Args:
-        audio: Audio signal
-        sr: Sample rate
-        cut_points: List of (start, end) cut tuples
-
-    Returns:
-        Score from 0 to 10 points
-    """
-    if not cut_points:
-        return 10.0
-
-    try:
-        # Compute spectral flux (onset strength)
-        onset_env = librosa.onset.onset_strength(y=audio, sr=sr)
-        times = librosa.times_like(onset_env, sr=sr)
-
-        score = 0.0
-        for cut_start, cut_end in cut_points:
-            # Check flux at cut boundaries
-            start_idx = np.argmin(np.abs(times - cut_start))
-            end_idx = np.argmin(np.abs(times - cut_end))
-
-            # Lower flux = better (smoother transition)
-            start_flux = onset_env[start_idx] if start_idx < len(onset_env) else 0
-            end_flux = onset_env[end_idx] if end_idx < len(onset_env) else 0
-
-            # Normalize: flux typically 0-2, invert so low flux = high score
-            avg_flux = (start_flux + end_flux) / 2
-            normalized_score = max(0, 1.0 - avg_flux / 2.0)
-            score += normalized_score * (10.0 / len(cut_points))
-
-        return min(10.0, score)
-    except Exception:
-        return 5.0  # Partial credit on error
-
-
-def score_loudness_consistency(audio: np.ndarray, sr: int, cut_points: List[Tuple[float, float]]) -> float:
-    """
-    Score loudness consistency using EBU R128 LUFS standard.
-
-    Research-backed metric: Broadcasting standard (EBU R128), perceptually validated.
-    Measures perceived loudness variance at transitions.
-
-    Args:
-        audio: Audio signal
-        sr: Sample rate
-        cut_points: List of (start, end) cut tuples
-
-    Returns:
-        Score from 0 to 10 points
-    """
-    if not cut_points:
-        return 10.0
-
-    try:
-        import pyloudnorm as pyln
-
-        meter = pyln.Meter(sr)
-
-        scores = []
-        for cut_start, cut_end in cut_points:
-            # Extract 2-second segments before and after cut
-            before_start = max(0, cut_start - 2.0)
-            before_end = cut_start
-            after_start = cut_end
-            after_end = min(len(audio) / sr, cut_end + 2.0)
-
-            before_segment = audio[int(before_start * sr):int(before_end * sr)]
-            after_segment = audio[int(after_start * sr):int(after_end * sr)]
-
-            # Need at least 0.4s for LUFS measurement
-            if len(before_segment) < sr * 0.4 or len(after_segment) < sr * 0.4:
-                scores.append(5.0)  # Partial credit if too short
-                continue
-
-            try:
-                # Measure integrated loudness (LUFS)
-                loudness_before = meter.integrated_loudness(before_segment)
-                loudness_after = meter.integrated_loudness(after_segment)
-
-                # Calculate difference in Loudness Units (LU)
-                lu_diff = abs(loudness_before - loudness_after)
-
-                # Research: 3 LU is perceptual threshold for noticeable difference
-                if lu_diff < 3.0:
-                    scores.append(10.0)  # Imperceptible difference
-                elif lu_diff < 6.0:
-                    scores.append(7.0)   # Slight difference
-                elif lu_diff < 10.0:
-                    scores.append(4.0)   # Noticeable difference
-                else:
-                    scores.append(1.0)   # Large difference (poor)
-            except Exception:
-                # LUFS measurement failed (e.g., silent segment)
-                scores.append(5.0)
-
-        return np.mean(scores) if scores else 10.0
-
-    except ImportError:
-        # Fall back to RMS if pyloudnorm not available
-        try:
-            rms = librosa.feature.rms(y=audio, frame_length=2048, hop_length=512)[0]
-            times = librosa.times_like(rms, sr=sr, hop_length=512)
-
-            score = 0.0
-            for cut_start, cut_end in cut_points:
-                before_idx = np.argmin(np.abs(times - max(0, cut_start - 0.5)))
-                after_idx = np.argmin(np.abs(times - min(len(audio)/sr, cut_end + 0.5)))
-
-                if before_idx < len(rms) and after_idx < len(rms):
-                    before_rms = rms[before_idx]
-                    after_rms = rms[after_idx]
-
-                    if before_rms > 0 and after_rms > 0:
-                        db_diff = abs(20 * np.log10(after_rms / (before_rms + 1e-8)))
-                        if db_diff < 3.0:
-                            score += 10.0 / len(cut_points)
-                        elif db_diff < 6.0:
-                            score += 5.0 / len(cut_points)
-                        elif db_diff < 10.0:
-                            score += 2.0 / len(cut_points)
-                    else:
-                        score += 5.0 / len(cut_points)
-
-            return min(10.0, score)
-        except Exception:
-            return 5.0
-    except Exception:
-        return 5.0
-
-
-def score_tempo_stability(audio: np.ndarray, sr: int) -> float:
-    """
-    Score tempo stability using beat interval variance.
-
-    Research-backed metric: Beat tracking evaluation metrics from MIREX.
-    Measures rhythm consistency across the edit. Lower variance = more stable.
-
-    Args:
-        audio: Audio signal
-        sr: Sample rate
-
-    Returns:
-        Score from 0 to 10 points
-    """
-    try:
-        # Detect beats
-        tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sr)
-
-        if len(beat_frames) < 2:
-            return 5.0  # Cannot measure, give neutral score
-
-        # Convert beat frames to times
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-
-        # Calculate inter-beat intervals (IBI)
-        intervals = np.diff(beat_times)
-
-        if len(intervals) < 2:
-            return 8.0  # Too few intervals, but beats detected
-
-        # Measure variance (lower = more stable)
-        variance = np.var(intervals)
-
-        # Research: Variance < 0.01 is very stable, > 0.1 is unstable
-        # Convert to 0-10 scale
-        if variance < 0.01:
-            score = 10.0  # Very stable
-        elif variance < 0.05:
-            score = 8.0   # Stable
-        elif variance < 0.1:
-            score = 6.0   # Moderately stable
-        elif variance < 0.2:
-            score = 3.0   # Unstable
-        else:
-            score = 1.0   # Very unstable
-
-        return score
-
-    except Exception:
-        return 5.0  # Partial credit on error
-
-
-def score_transition_smoothness(
-    audio: np.ndarray,
-    sr: int,
-    cut_points: List[Tuple[float, float]],
-    fade_regions: List[Tuple[float, float]]
-) -> float:
-    """
-    Score transition smoothness (raw max 40 points, rescaled to 30 in score_strategy).
-
-    Components:
-    - Phase alignment (15 points): Check amplitude at cut points
-    - Zero-crossing (10 points): Check if cuts are near zero-crossings
-    - Fade quality (15 points): Check fade duration and smoothness
-
-    Args:
-        audio: Audio signal as numpy array
-        sr: Sample rate
-        cut_points: List of (start_time, end_time) tuples for cuts
-        fade_regions: List of (fade_start, fade_end) tuples for fades
-
-    Returns:
-        Score from 0 to 40 points
-    """
-    if not cut_points:
-        # No cuts means perfect smoothness
-        return 40.0
-
-    phase_score = 0.0
-    zero_crossing_score = 0.0
-    fade_score = 0.0
-
-    # Phase alignment scoring (15 points max)
-    for cut_start, cut_end in cut_points:
-        start_idx = int(cut_start * sr)
-        end_idx = int(cut_end * sr)
-
-        # Check amplitude at cut points (lower is better)
-        if start_idx < len(audio):
-            start_amp = abs(audio[start_idx])
-            # Score: 0.0 amplitude = full points, 1.0 amplitude = 0 points
-            phase_score += (1.0 - min(start_amp, 1.0)) * (7.5 / len(cut_points))
-
-        if end_idx < len(audio):
-            end_amp = abs(audio[end_idx])
-            phase_score += (1.0 - min(end_amp, 1.0)) * (7.5 / len(cut_points))
-
-    # Zero-crossing scoring (10 points max)
-    for cut_start, cut_end in cut_points:
-        start_idx = int(cut_start * sr)
-        end_idx = int(cut_end * sr)
-
-        # Check for zero-crossings within ±100 samples
-        window = 100
-        if start_idx < len(audio):
-            start_window = audio[max(0, start_idx - window):min(len(audio), start_idx + window)]
-            if len(start_window) > 0:
-                # Check if there's a zero crossing (sign change)
-                zero_crossings = np.where(np.diff(np.sign(start_window)))[0]
-                if len(zero_crossings) > 0:
-                    zero_crossing_score += 5.0 / len(cut_points)
-
-        if end_idx < len(audio):
-            end_window = audio[max(0, end_idx - window):min(len(audio), end_idx + window)]
-            if len(end_window) > 0:
-                zero_crossings = np.where(np.diff(np.sign(end_window)))[0]
-                if len(zero_crossings) > 0:
-                    zero_crossing_score += 5.0 / len(cut_points)
-
-    # Fade quality scoring (15 points max)
-    for fade_start, fade_end in fade_regions:
-        fade_duration = fade_end - fade_start
-
-        # Ideal fade durations: 0.15s (conservative), 0.075s (balanced), 0.0375s (aggressive)
-        # Score based on duration: 0.05-0.3s is good range
-        if 0.05 <= fade_duration <= 0.3:
-            fade_score += 10.0 / len(fade_regions)
-        elif 0.03 <= fade_duration <= 0.5:
-            fade_score += 5.0 / len(fade_regions)
-
-        # Check fade smoothness (fade regions should have gradual amplitude change)
-        fade_start_idx = int(fade_start * sr)
-        fade_end_idx = int(fade_end * sr)
-
-        if fade_start_idx < len(audio) and fade_end_idx < len(audio):
-            fade_segment = audio[fade_start_idx:fade_end_idx]
-            if len(fade_segment) > 1:
-                # Check if amplitude changes gradually (low variance in differences)
-                amp_envelope = np.abs(fade_segment)
-                if len(amp_envelope) > 2:
-                    gradients = np.diff(amp_envelope)
-                    gradient_variance = np.var(gradients)
-                    # Lower variance = smoother fade
-                    if gradient_variance < 0.01:
-                        fade_score += 5.0 / len(fade_regions)
-                    elif gradient_variance < 0.05:
-                        fade_score += 2.5 / len(fade_regions)
-
-    total_score = phase_score + zero_crossing_score + fade_score
-    return min(40.0, total_score)
-
-
-def score_cut_pattern(cut_points: List[Tuple[float, float]], original_length: float) -> float:
-    """
-    Score cut pattern quality (bonus points for radio edit style).
-
-    Radio edit pattern = back-to-back cuts forming continuous removal from middle.
-    This creates more natural sounding results than scattered cuts.
-
-    Scoring:
-    - Continuous cuts (gap <3s): +5 points per merged group
-    - Middle-focused cuts (20%-80% region): +2 points per cut
-    - Fewer cut groups: bonus up to +5 points
-
-    Args:
-        cut_points: List of (start_time, end_time) tuples for cuts
-        original_length: Original audio length
-
-    Returns:
-        Bonus score from 0 to 15 points
-    """
-    if not cut_points:
-        return 0.0
-
-    score = 0.0
-
-    # Sort cuts by start time
-    sorted_cuts = sorted(cut_points, key=lambda x: x[0])
-
-    # Build groups explicitly to count properly
-    groups = []
-    i = 0
-    while i < len(sorted_cuts):
-        group_start = sorted_cuts[i][0]
-        group_end = sorted_cuts[i][1]
-        group_size = 1
-
-        j = i + 1
-        while j < len(sorted_cuts):
-            if sorted_cuts[j][0] - group_end <= 3.0:  # Within 3s = continuous
-                group_end = max(group_end, sorted_cuts[j][1])
-                group_size += 1
-                j += 1
-            else:
-                break
-
-        groups.append({'start': group_start, 'end': group_end, 'size': group_size})
-        i = j if j > i else i + 1
-
-    # Score 1: Reward continuous groups (back-to-back cuts)
-    for group in groups:
-        if group['size'] >= 2:
-            score += 5.0  # +5 points per continuous group
-
-    # Score 2: Reward middle-focused cuts (radio edit style)
-    middle_start = original_length * 0.2
-    middle_end = original_length * 0.8
-
-    for cut_start, cut_end in cut_points:
-        cut_center = (cut_start + cut_end) / 2
-        if middle_start <= cut_center <= middle_end:
-            score += 2.0  # +2 points per middle cut
-
-    # Score 3: Reward fewer cut groups (cleaner result)
-    num_groups = len(groups)
-    if num_groups == 1:
-        score += 5.0  # All cuts in one continuous block
-    elif num_groups == 2:
-        score += 3.0
-    elif num_groups == 3:
-        score += 1.0
-
-    return min(15.0, score)
-
-
-def score_musical_coherence(
-    audio: np.ndarray,
-    sr: int,
-    cut_points: List[Tuple[float, float]],
-    original_length: float = None
-) -> float:
-    """
-    Score musical coherence (max 50 points).
-
-    Components:
-    - Beat alignment (20 points): Check if cuts are near beats
-    - Harmonic continuity (10 points): Check chroma similarity at cut boundaries
-    - Section order (10 points): Penalize cuts in intro/outro
-    - Cut pattern bonus (10 points): Reward radio edit style (back-to-back cuts)
-
-    Args:
-        audio: Audio signal as numpy array
-        sr: Sample rate
-        cut_points: List of (start_time, end_time) tuples for cuts
-        original_length: Original audio length (for pattern scoring)
-
-    Returns:
-        Score from 0 to 50 points
-    """
-    if not cut_points:
-        # No cuts means perfect coherence
-        return 50.0
-
-    beat_score = 0.0
-    harmonic_score = 0.0
-    section_score = 0.0
-    pattern_bonus = 0.0
-
-    # Get beat times using librosa
-    try:
-        tempo, beat_frames = librosa.beat.beat_track(y=audio, sr=sr)
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-    except Exception:
-        # If beat tracking fails, give partial credit
-        beat_times = np.array([])
-
-    # Calculate audio duration
-    duration = len(audio) / sr if original_length is None else original_length
-
-    # Beat alignment scoring (20 points max)
-    if len(beat_times) > 0:
-        for cut_start, cut_end in cut_points:
-            # Check if cut_start is near a beat (within ±0.1s)
-            start_distances = np.abs(beat_times - cut_start)
-            if len(start_distances) > 0 and np.min(start_distances) <= 0.1:
-                beat_score += 10.0 / len(cut_points)
-
-            # Check if cut_end is near a beat (within ±0.1s)
-            end_distances = np.abs(beat_times - cut_end)
-            if len(end_distances) > 0 and np.min(end_distances) <= 0.1:
-                beat_score += 10.0 / len(cut_points)
-    else:
-        # If no beats detected, give partial credit based on timing regularity
-        beat_score = 10.0
-
-    # Harmonic continuity scoring (10 points max)
-    try:
-        # Compute chromagram for harmonic analysis
-        chroma = librosa.feature.chroma_cqt(y=audio, sr=sr)
-
-        for cut_start, cut_end in cut_points:
-            # Get chroma at cut boundaries
-            start_frame = librosa.time_to_frames(cut_start, sr=sr)
-            end_frame = librosa.time_to_frames(cut_end, sr=sr)
-
-            if start_frame < chroma.shape[1] and end_frame < chroma.shape[1]:
-                # Get chroma vectors before cut_start and after cut_end
-                before_chroma = chroma[:, max(0, start_frame - 2):start_frame + 1]
-                after_chroma = chroma[:, end_frame:min(chroma.shape[1], end_frame + 3)]
-
-                if before_chroma.size > 0 and after_chroma.size > 0:
-                    # Average chroma for before and after
-                    before_avg = np.mean(before_chroma, axis=1)
-                    after_avg = np.mean(after_chroma, axis=1)
-
-                    # Calculate cosine similarity
-                    similarity = np.dot(before_avg, after_avg) / (
-                        np.linalg.norm(before_avg) * np.linalg.norm(after_avg) + 1e-8
-                    )
-
-                    # Higher similarity = better score
-                    harmonic_score += similarity * (10.0 / len(cut_points))
-    except Exception:
-        # If chroma analysis fails, give partial credit
-        harmonic_score = 5.0
-
-    # Section order scoring (10 points max)
-    intro_duration = min(10.0, duration * 0.1)  # First 10s or 10% of song
-    outro_duration = min(10.0, duration * 0.1)  # Last 10s or 10% of song
-
-    for cut_start, cut_end in cut_points:
-        # Check if cut is in intro
-        if cut_start < intro_duration:
-            # Penalize intro cuts
-            section_score -= 5.0 / len(cut_points)
-        # Check if cut is in outro
-        elif cut_end > (duration - outro_duration):
-            # Penalize outro cuts
-            section_score -= 5.0 / len(cut_points)
-        else:
-            # Reward middle cuts
-            section_score += 10.0 / len(cut_points)
-
-    # Cut pattern bonus scoring (10 points max) - NEW!
-    pattern_bonus = score_cut_pattern(cut_points, duration) * (10.0 / 15.0)  # Scale to 10 points
-
-    total_score = beat_score + harmonic_score + section_score + pattern_bonus
-    return max(0.0, min(50.0, total_score))
+from typing import Dict, List, Optional, Sequence, Tuple
+
+# Component weights — must sum to 100.
+W_BEAT = 30.0
+W_HARMONIC = 25.0
+W_STRUCTURE = 20.0
+W_ENERGY = 15.0
+W_LENGTH = 10.0
+
+# Tolerances / windows.
+BEAT_TOLERANCE = 0.07      # 70 ms — a boundary this close to a downbeat counts as aligned
+STRUCT_TOLERANCE = 1.0     # 1 s — a boundary this close to a section edge counts as on-structure
+CONTINUITY_WINDOW = 0.5    # seconds analysed on each side of a join
+
+_EPS = 1e-8
 
 
 def score_length_accuracy(target_length: float, resulting_length: float) -> float:
+    """Length closeness, 0..10.
+
+    Anything within 5% of target is treated as on-target (full marks) — the
+    design deliberately values a clean edit over the last few seconds. Beyond
+    25% off scores zero; in between it falls off linearly.
     """
-    Score length accuracy (max 20 points) - STRICT ±15s enforcement.
-
-    Thresholds (strict):
-    - ±0-5s → 20 points (excellent)
-    - ±5-15s → 15-5 points (acceptable, linear decay)
-    - ±15-30s → 5-0 points (poor, steep penalty)
-    - >±30s → 0 points (unacceptable)
-
-    Args:
-        target_length: Target length in seconds
-        resulting_length: Resulting length after applying strategy
-
-    Returns:
-        Score from 0 to 20 points
-    """
-    error = abs(resulting_length - target_length)
-
-    if error <= 5.0:
-        return 20.0
-    elif error <= 15.0:
-        # Linear decay: 20 points at 5s → 5 points at 15s
-        return 20.0 - (error - 5.0) * 1.5
-    elif error <= 30.0:
-        # Steep penalty: 5 points at 15s → 0 points at 30s
-        return 5.0 - (error - 15.0) * (5.0 / 15.0)
-    else:
-        # Zero points for errors > 30s
+    if target_length <= 0:
+        return W_LENGTH
+    rel = abs(resulting_length - target_length) / target_length
+    if rel <= 0.05:
+        return W_LENGTH
+    if rel >= 0.25:
         return 0.0
+    return W_LENGTH * (0.25 - rel) / (0.25 - 0.05)
+
+
+def cut_count_multiplier(n_edits: int) -> float:
+    """Anti-fragmentation penalty applied to the 100-point base.
+
+    One clean splice is unpenalized; every additional cut/loop costs more,
+    because scattered micro-edits read as sloppy no matter how each individual
+    seam scores.
+    """
+    return {0: 1.0, 1: 1.0, 2: 0.85, 3: 0.65}.get(n_edits, 0.40)
+
+
+def score_beat_alignment(
+    boundary_times: Sequence[float],
+    downbeats: Optional[Sequence[float]],
+    tolerance: float = BEAT_TOLERANCE,
+) -> float:
+    """Fraction of edit boundaries that land on a downbeat, scaled to 0..30.
+
+    No boundaries → nothing to misalign, full marks. No downbeat data →
+    neutral midpoint (we can neither reward nor punish).
+    """
+    if len(boundary_times) == 0:
+        return W_BEAT
+    if downbeats is None or len(downbeats) == 0:
+        return W_BEAT * 0.5
+    db = np.asarray(list(downbeats), dtype=float)
+    aligned = sum(1 for t in boundary_times if np.min(np.abs(db - t)) <= tolerance)
+    return W_BEAT * (aligned / len(boundary_times))
+
+
+def score_structural_position(
+    boundary_times: Sequence[float],
+    sections: Optional[List[Dict]],
+    tolerance: float = STRUCT_TOLERANCE,
+) -> float:
+    """Fraction of boundaries sitting on a section edge, scaled to 0..20.
+
+    Rewards edits that happen at structural seams (intro/verse/chorus edges)
+    rather than mid-phrase. No boundaries → full; no section data → neutral.
+    """
+    if len(boundary_times) == 0:
+        return W_STRUCTURE
+    if not sections:
+        return W_STRUCTURE * 0.5
+    edges = np.asarray(
+        [edge for s in sections for edge in (s['start'], s['end'])], dtype=float
+    )
+    on_edge = sum(1 for t in boundary_times if np.min(np.abs(edges - t)) <= tolerance)
+    return W_STRUCTURE * (on_edge / len(boundary_times))
+
+
+def score_harmonic_continuity(
+    audio: np.ndarray,
+    sr: int,
+    joins: List[Tuple[float, float]],
+    window_sec: float = CONTINUITY_WINDOW,
+) -> float:
+    """Mean chroma similarity across each join, scaled to 0..25.
+
+    For each (left_time, right_time) seam we compare the average chroma of the
+    window ending at ``left_time`` with the window starting at ``right_time``.
+    High cosine similarity means the harmonic context is the same on both sides
+    — the dominant perceptual cue that a splice "sounds like the same song".
+    """
+    if not joins:
+        return W_HARMONIC
+    import librosa
+
+    sims = []
+    for left_t, right_t in joins:
+        left = _slice(audio, sr, left_t - window_sec, left_t)
+        right = _slice(audio, sr, right_t, right_t + window_sec)
+        if len(left) < sr // 20 or len(right) < sr // 20:  # need ~50ms to mean anything
+            continue
+        cl = librosa.feature.chroma_cqt(y=np.asarray(left, dtype=float), sr=sr).mean(axis=1)
+        cr = librosa.feature.chroma_cqt(y=np.asarray(right, dtype=float), sr=sr).mean(axis=1)
+        sims.append(max(0.0, _cosine(cl, cr)))
+    if not sims:
+        return W_HARMONIC
+    return W_HARMONIC * float(np.mean(sims))
+
+
+def score_energy_continuity(
+    audio: np.ndarray,
+    sr: int,
+    joins: List[Tuple[float, float]],
+    window_sec: float = CONTINUITY_WINDOW,
+) -> float:
+    """Penalty for loudness jumps across each join, scaled to 0..15.
+
+    A seam with a <=3 dB RMS jump is inaudible (full marks); the score falls
+    linearly to zero by 9 dB. Continuous silence on both sides counts as
+    seamless; silence meeting sound does not.
+    """
+    if not joins:
+        return W_ENERGY
+    fractions = []
+    for left_t, right_t in joins:
+        left = _slice(audio, sr, left_t - window_sec, left_t)
+        right = _slice(audio, sr, right_t, right_t + window_sec)
+        rms_l = _rms(left)
+        rms_r = _rms(right)
+        if rms_l < _EPS and rms_r < _EPS:
+            fractions.append(1.0)        # silence → silence, seamless
+        elif rms_l < _EPS or rms_r < _EPS:
+            fractions.append(0.0)        # silence meets sound, jarring
+        else:
+            delta_db = abs(20.0 * np.log10(rms_r / rms_l))
+            fractions.append(_db_jump_to_fraction(delta_db))
+    return W_ENERGY * float(np.mean(fractions)) if fractions else W_ENERGY
+
+
+def points_to_stars(points: float) -> float:
+    """Map a 0-100 point total to a 0.0-5.0 star rating (0.1 increments)."""
+    points = max(0.0, min(100.0, points))
+    return round(points / 20.0, 1)
 
 
 def score_strategy(
-    strategy: TrimStrategy,
+    strategy,
     original_audio: np.ndarray,
     sr: int,
     original_length: float,
-    rendered_audio: np.ndarray = None,
-    use_mert: bool = False,
-    device: str = "cpu"
+    rendered_audio: Optional[np.ndarray] = None,
+    downbeats: Optional[Sequence[float]] = None,
+    sections: Optional[List[Dict]] = None,
 ) -> Dict:
+    """Score a trim or extend strategy on the unified 100-point rubric.
+
+    The same five components and the same cut-count penalty apply to both
+    directions, so star ratings are directly comparable across trim and extend.
+
+    ``downbeats`` and ``sections`` come from the structure analysis; when a
+    caller cannot supply them the relevant components fall back to neutral
+    scoring rather than failing.
+
+    Returns a dict with ``total_points``, ``star_rating``, ``breakdown`` (the
+    five component scores plus the applied multiplier) and ``resulting_length``.
     """
-    Score a complete trim/extension strategy with research-backed metrics.
-
-    Calculates resulting length, scores all components, and converts total to star rating.
-
-    Scoring weights:
-    - Musical coherence: 50 points (50%) - includes cut pattern bonus / loop quality, optional MERT
-    - Transition smoothness: 30 points (30%) - spectral flux, LUFS loudness, tempo stability
-    - Length accuracy: 20 points (20%) - STRICT ±15s enforcement
-    Total: 100 points → converted to 0.0-5.0 star rating (0.1 increments)
-
-    Research justification:
-    - Spectral flux: Standard in MIR (Foote 2000, onset detection)
-    - LUFS loudness: EBU R128 broadcast standard (perceptually validated)
-    - Tempo stability: Beat tracking evaluation metrics (MIREX)
-    - Weights: Based on perceptual importance studies
-
-    Args:
-        strategy: TrimStrategy object with cut_points, loop_points, fade_regions, target_length
-        original_audio: Original audio signal as numpy array
-        sr: Sample rate
-        original_length: Original audio length in seconds
-        rendered_audio: The actual rendered audio after applying strategy (if None, estimates length)
-        use_mert: Whether to use MERT embeddings for transition scoring (slower but better)
-        device: Device for MERT inference ("cpu" or "cuda")
-
-    Returns:
-        Dict with keys:
-            - total_points: Total score (0-100)
-            - star_rating: Star rating (0.0-5.0 in 0.1 increments)
-            - breakdown: Dict with component scores
-                - musical_coherence: 0-50 points
-                - transition_smoothness: 0-30 points (research-backed metrics)
-                - length_accuracy: 0-20 points
-            - resulting_length: Resulting audio length in seconds
-    """
-    # Calculate resulting length from rendered audio
     if rendered_audio is not None:
         resulting_length = len(rendered_audio) / sr
     else:
         resulting_length = strategy.calculate_resulting_length(original_length)
 
-    # Detect if this is an extension strategy (has loops) or trim strategy (has cuts)
     is_extension = len(strategy.loop_points) > 0 and len(strategy.cut_points) == 0
 
+    boundary_times: List[float] = []
+    joins: List[Tuple[float, float]] = []
     if is_extension:
-        # Extension scoring: evaluate loop naturalness
-        coherence_score = score_loop_naturalness(
-            original_audio, sr, strategy.loop_points, original_length
-        )
-
-        # Score loop transition smoothness (30 points max) - RESEARCH-BACKED
-        # Base loop boundary score (15 pts)
-        transition_score = score_loop_transitions(
-            original_audio, sr, strategy.loop_points
-        )
-        # Rescale from potential range to 15 points
-        transition_score = min(15.0, transition_score)
-
-        # Add research-backed heuristics for loops (20 points)
-        # For loops, we evaluate the loop boundaries similarly to cuts
-        loop_boundaries = []
-        for start, end, repeat_count in strategy.loop_points:
-            # Each loop creates transitions at its boundaries
-            for _ in range(repeat_count - 1):
-                loop_boundaries.append((end, start))  # Loop back transition
-
-        if loop_boundaries:
-            spectral_flux_score = score_spectral_flux(original_audio, sr, loop_boundaries) * 0.5  # 5 pts
-            loudness_score = score_loudness_consistency(original_audio, sr, loop_boundaries) * 0.4  # 4 pts
-        else:
-            spectral_flux_score = 5.0
-            loudness_score = 4.0
-
-        # Tempo stability on rendered audio (7 pts)
-        if rendered_audio is not None:
-            tempo_score = score_tempo_stability(rendered_audio, sr) * 0.7
-        else:
-            tempo_score = 3.5
-
-        # Combine transition scores (15 + 5 + 4 + 7 = 31, scale to 30)
-        transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (30.0 / 31.0)
-
-        # Optional MERT bonus for loop transitions
-        if use_mert:
-            mert_bonus = score_mert_loop_transitions(original_audio, sr, strategy.loop_points, device)
-            if mert_bonus is not None:
-                coherence_score = min(50.0, coherence_score + mert_bonus)
+        for ls, le, _count in strategy.loop_points:
+            boundary_times.extend([ls, le])
+            joins.append((le, ls))   # loop wrap: section end meets its own start
+        n_edits = len(strategy.loop_points)
     else:
-        # Trim scoring: existing logic
-        coherence_score = score_musical_coherence(
-            original_audio, sr, strategy.cut_points, original_length
-        )
+        for cs, ce in strategy.cut_points:
+            boundary_times.extend([cs, ce])
+            joins.append((cs, ce))   # cut seam: audio before meets audio after
+        n_edits = len(strategy.cut_points)
 
-        # Optional: Add MERT embedding similarity bonus (up to 5 extra points)
-        if use_mert and len(strategy.cut_points) > 0:
-            mert_bonus = score_mert_transitions(original_audio, sr, strategy.cut_points, device)
-            if mert_bonus is not None:
-                # Add bonus to coherence (capped at 50 points total)
-                coherence_score = min(50.0, coherence_score + mert_bonus)
+    beat = score_beat_alignment(boundary_times, downbeats)
+    harmonic = score_harmonic_continuity(original_audio, sr, joins)
+    structure = score_structural_position(boundary_times, sections)
+    energy = score_energy_continuity(original_audio, sr, joins)
+    length = score_length_accuracy(strategy.target_length, resulting_length)
 
-        # Score transition smoothness (30 points max) - RESEARCH-BACKED
-        # Base score from phase alignment and zero-crossings (15 pts)
-        transition_score = score_transition_smoothness(
-            original_audio, sr, strategy.cut_points, strategy.fade_regions
-        )
-        # Rescale from 40 points to 15 points
-        transition_score = (transition_score / 40.0) * 15.0
-
-        # Add research-backed heuristics (20 points total)
-        spectral_flux_score = score_spectral_flux(original_audio, sr, strategy.cut_points)  # 10 pts
-        loudness_score = score_loudness_consistency(original_audio, sr, strategy.cut_points)  # 8 pts
-
-        # Tempo stability (7 pts) - measure on rendered audio if available
-        if rendered_audio is not None:
-            tempo_score = score_tempo_stability(rendered_audio, sr) * 0.7  # Scale 10→7
-        else:
-            tempo_score = 3.5  # Neutral score if no rendered audio
-
-        # Combine: 15 pts base + 10 pts spectral + 8 pts loudness + 7 pts tempo = 40 pts total
-        # Scale to 30 pts (transition is now 30%, length raised to 20%).
-        transition_score = (transition_score + spectral_flux_score + loudness_score + tempo_score) * (30.0 / 40.0)
-
-    # Score length accuracy (20 points max) — full weight, no downscale.
-    # Length is a user constraint and the default scorer historically
-    # under-weighted it (length_score * 0.75 → 15 pts), letting strategies
-    # drift well past ±15s. Restoring full 20 pts narrows the deviation.
-    length_score = score_length_accuracy(
-        strategy.target_length, resulting_length
-    )
-
-    # Calculate total points (coherence 50 + transition 30 + length 20 = 100)
-    total_points = coherence_score + transition_score + length_score
-
-    # Convert to star rating (0.1 increments)
+    base = beat + harmonic + structure + energy + length
+    multiplier = cut_count_multiplier(n_edits)
+    total_points = base * multiplier
     star_rating = points_to_stars(total_points)
 
     return {
         'total_points': total_points,
         'star_rating': star_rating,
         'breakdown': {
-            'musical_coherence': coherence_score,
-            'transition_smoothness': transition_score,
-            'length_accuracy': length_score
+            'beat_alignment': beat,
+            'harmonic_continuity': harmonic,
+            'structural_position': structure,
+            'energy_continuity': energy,
+            'length_accuracy': length,
+            'cut_count_multiplier': multiplier,
         },
-        'resulting_length': resulting_length
+        'resulting_length': resulting_length,
     }
 
 
-def score_mert_transitions(
-    audio: np.ndarray,
-    sr: int,
-    cut_points: List[Tuple[float, float]],
-    device: str = "cpu"
-) -> Optional[float]:
-    """
-    Score transition quality using MERT embeddings (optional, high-quality).
-
-    Compares audio segments before and after cuts using semantic similarity.
-
-    Args:
-        audio: Audio signal
-        sr: Sample rate
-        cut_points: List of (start, end) cut tuples
-        device: Device for MERT inference
-
-    Returns:
-        Bonus score from 0 to 5 points, or None if MERT unavailable
-    """
-    if not cut_points:
-        return None
-
-    try:
-        score = 0.0
-        window = 2.0  # 2 seconds before/after cut
-
-        for cut_start, cut_end in cut_points:
-            # Extract segments before and after cut
-            before_start = max(0, cut_start - window)
-            before_end = cut_start
-            after_start = cut_end
-            after_end = min(len(audio) / sr, cut_end + window)
-
-            before_samples = audio[int(before_start * sr):int(before_end * sr)]
-            after_samples = audio[int(after_start * sr):int(after_end * sr)]
-
-            if len(before_samples) < sr or len(after_samples) < sr:
-                continue  # Skip if segments too short
-
-            # Get MERT embeddings
-            before_emb = get_mert_embeddings(before_samples, sr, device)
-            after_emb = get_mert_embeddings(after_samples, sr, device)
-
-            if before_emb is not None and after_emb is not None:
-                # Calculate cosine similarity
-                similarity = np.dot(before_emb.flatten(), after_emb.flatten()) / (
-                    np.linalg.norm(before_emb) * np.linalg.norm(after_emb) + 1e-8
-                )
-                # Higher similarity = better transition
-                score += max(0, similarity) * (5.0 / len(cut_points))
-
-        return min(5.0, score)
-    except Exception as e:
-        print(f"⚠️  MERT transition scoring failed: {e}")
-        return None
-
-
-def points_to_stars(points: float) -> float:
-    """
-    Convert points (0-100 scale) to star rating with 0.1 increments.
-
-    Linear mapping for simplicity and consistency:
-    - 100 points → 5.0 stars
-    - 80 points → 4.0 stars
-    - 60 points → 3.0 stars
-    - 40 points → 2.0 stars
-    - 20 points → 1.0 stars
-    - 0 points → 0.0 stars
-
-    Normalized to full 0.0-5.0 scale as per requirements.
-
-    Args:
-        points: Score on 0-100 scale
-
-    Returns:
-        Star rating (0.0 to 5.0) in 0.1 increments, rounded
-    """
-    # Linear mapping: 0-100 points → 0.0-5.0 stars
-    # Each 20 points = 1 star
-    raw_stars = (points / 100.0) * 5.0
-
-    # Round to nearest 0.1
-    stars = round(raw_stars, 1)
-
-    # Clamp to valid range
-    return max(0.0, min(5.0, stars))
-
-
-def score_loop_naturalness(
-    audio: np.ndarray,
-    sr: int,
-    loop_points: List[Tuple[float, float, int]],
-    original_length: float
-) -> float:
-    """
-    Score how natural the loop repetitions are (extension quality).
-
-    Evaluates:
-    - Loop diversity (20 pts): Not repeating same section too much
-    - Section quality (15 pts): Prefer choruses, avoid intro/outro
-    - Over-repetition penalty (15 pts): Limit total repetitions
-
-    Args:
-        audio: Audio data
-        sr: Sample rate
-        loop_points: List of (start, end, repeat_count) tuples
-        original_length: Original audio length
-
-    Returns:
-        Score from 0-50 points
-    """
-    if not loop_points:
-        return 25.0  # Neutral score for no loops
-
-    score = 0.0
-    total_loops = len(loop_points)
-
-    # 1. Loop Diversity (0-20 points)
-    # Penalize repeating the same section multiple times
-    unique_sections = set((start, end) for start, end, _ in loop_points)
-    diversity_ratio = len(unique_sections) / max(1, total_loops)
-    score += 20.0 * diversity_ratio
-
-    # 2. Section Quality (0-15 points)
-    # Score based on what sections are being repeated
-    for start, end, repeat_count in loop_points:
-        duration = end - start
-        relative_start = start / original_length
-
-        # Prefer middle sections (avoid intro/outro)
-        if 0.15 < relative_start < 0.85:
-            score += 5.0 / max(1, total_loops)
-
-        # Prefer reasonable durations (12-30s)
-        if 12.0 <= duration <= 30.0:
-            score += 5.0 / max(1, total_loops)
-
-        # Prefer shorter repetitions (2-3x) over excessive (5x+)
-        if repeat_count <= 3:
-            score += 5.0 / max(1, total_loops)
-
-    # 3. Over-repetition Penalty (0-15 points)
-    # Penalize if too many total repetitions
-    total_repetitions = sum(count for _, _, count in loop_points)
-    if total_repetitions <= 6:
-        score += 15.0  # Good: not too repetitive
-    elif total_repetitions <= 10:
-        score += 10.0  # Acceptable
-    else:
-        score += 5.0  # Too repetitive
-
-    return min(50.0, score)
-
-
-def score_loop_transitions(
-    audio: np.ndarray,
-    sr: int,
-    loop_points: List[Tuple[float, float, int]]
-) -> float:
-    """
-    Score transition smoothness at loop boundaries (extension quality).
-
-    Evaluates:
-    - Energy consistency (10 pts): RMS energy at loop start/end boundaries
-    - Zero-crossing consistency (10 pts): Smooth zero-crossing alignment
-    - Spectral similarity (10 pts): Audio similarity at boundaries
-
-    Args:
-        audio: Audio data
-        sr: Sample rate
-        loop_points: List of (start, end, repeat_count) tuples
-
-    Returns:
-        Score from 0-30 points
-    """
-    if not loop_points:
-        return 15.0  # Neutral score
-
-    score = 0.0
-    total_transitions = len(loop_points)
-
-    for start, end, _ in loop_points:
-        # Analyze boundary regions (500ms)
-        boundary_duration = 0.5
-        start_sample = int(start * sr)
-        end_sample = int(end * sr)
-        boundary_samples = int(boundary_duration * sr)
-
-        if end_sample - start_sample <= 2 * boundary_samples:
-            score += 10.0 / max(1, total_transitions)
-            continue
-
-        try:
-            start_region = audio[start_sample:start_sample + boundary_samples]
-            end_region = audio[end_sample - boundary_samples:end_sample]
-
-            # 1. Energy consistency (0-10 points per transition)
-            start_energy = np.sqrt(np.mean(start_region ** 2))
-            end_energy = np.sqrt(np.mean(end_region ** 2))
-
-            if start_energy > 0 and end_energy > 0:
-                energy_ratio = min(start_energy, end_energy) / max(start_energy, end_energy)
-                score += (10.0 * energy_ratio) / max(1, total_transitions)
-
-            # 2. Zero-crossing consistency (0-10 points per transition)
-            start_zc = np.sum(librosa.zero_crossings(start_region))
-            end_zc = np.sum(librosa.zero_crossings(end_region))
-
-            if start_zc > 0 and end_zc > 0:
-                zc_ratio = min(start_zc, end_zc) / max(start_zc, end_zc)
-                score += (10.0 * zc_ratio) / max(1, total_transitions)
-
-            # 3. Spectral similarity (0-10 points per transition)
-            start_spec = np.abs(librosa.stft(start_region, n_fft=2048))
-            end_spec = np.abs(librosa.stft(end_region, n_fft=2048))
-
-            start_mean = np.mean(start_spec, axis=1)
-            end_mean = np.mean(end_spec, axis=1)
-
-            spec_corr = np.corrcoef(start_mean, end_mean)[0, 1]
-            if not np.isnan(spec_corr):
-                score += (10.0 * max(0, spec_corr)) / max(1, total_transitions)
-
-        except Exception:
-            score += 10.0 / max(1, total_transitions)  # Neutral if analysis fails
-
-    return min(30.0, score)
-
-
-def score_mert_loop_transitions(
-    audio: np.ndarray,
-    sr: int,
-    loop_points: List[Tuple[float, float, int]],
-    device: str = "cpu"
-) -> Optional[float]:
-    """
-    Score loop transition quality using MERT embeddings (optional enhancement).
-
-    Args:
-        audio: Audio data
-        sr: Sample rate
-        loop_points: List of (start, end, repeat_count) tuples
-        device: Device for MERT inference
-
-    Returns:
-        Bonus score from 0-5 points, or None if MERT unavailable
-    """
-    if not loop_points or not _MERT_AVAILABLE:
-        return None
-
-    model, processor = load_mert_model(device)
-    if model is None or processor is None:
-        return None
-
-    try:
-        import torch
-
-        total_similarity = 0.0
-        num_transitions = 0
-
-        for start, end, _ in loop_points:
-            # Extract boundary regions (1 second each)
-            boundary_duration = 1.0
-            start_sample = int(start * sr)
-            end_sample = int(end * sr)
-            boundary_samples = int(boundary_duration * sr)
-
-            if end_sample - start_sample <= 2 * boundary_samples:
-                continue
-
-            start_region = audio[start_sample:start_sample + boundary_samples]
-            end_region = audio[end_sample - boundary_samples:end_sample]
-
-            # Get MERT embeddings
-            with torch.no_grad():
-                start_inputs = processor(start_region, sampling_rate=sr, return_tensors="pt")
-                end_inputs = processor(end_region, sampling_rate=sr, return_tensors="pt")
-
-                start_inputs = {k: v.to(device) for k, v in start_inputs.items()}
-                end_inputs = {k: v.to(device) for k, v in end_inputs.items()}
-
-                start_embed = model(**start_inputs).last_hidden_state.mean(dim=1).cpu().numpy().flatten()
-                end_embed = model(**end_inputs).last_hidden_state.mean(dim=1).cpu().numpy().flatten()
-
-            # Cosine similarity
-            similarity = np.dot(start_embed, end_embed) / (
-                np.linalg.norm(start_embed) * np.linalg.norm(end_embed) + 1e-10
-            )
-            total_similarity += max(0, similarity)
-            num_transitions += 1
-
-        if num_transitions > 0:
-            avg_similarity = total_similarity / num_transitions
-            return 5.0 * avg_similarity  # 0-5 bonus points
-
-    except Exception as e:
-        print(f"⚠️  MERT loop scoring failed: {e}")
-
-    return None
+# --- internal helpers -------------------------------------------------------
+
+def _slice(audio: np.ndarray, sr: int, t0: float, t1: float) -> np.ndarray:
+    """Sample slice for the time window [t0, t1], clamped to the audio bounds."""
+    i0 = max(0, int(t0 * sr))
+    i1 = min(len(audio), int(t1 * sr))
+    if i1 <= i0:
+        return np.zeros(0, dtype=float)
+    return audio[i0:i1]
+
+
+def _rms(samples: np.ndarray) -> float:
+    if len(samples) == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(np.asarray(samples, dtype=float)))))
+
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na < _EPS or nb < _EPS:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _db_jump_to_fraction(delta_db: float) -> float:
+    """Map an RMS jump in dB to a 0..1 quality fraction (<=3 dB best, >=9 dB worst)."""
+    if delta_db <= 3.0:
+        return 1.0
+    if delta_db >= 9.0:
+        return 0.0
+    return (9.0 - delta_db) / (9.0 - 3.0)

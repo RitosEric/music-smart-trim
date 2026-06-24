@@ -79,9 +79,7 @@ function App() {
         targetLength: params.targetLength,
         protectedRegions: params.protectedRegions,
         autoProtect: params.autoProtect,
-        useMert: params.useMert,
         strictLength: params.strictLength,
-        minSegmentDuration: params.minSegmentDuration,
       });
 
       pollStatus(uploadData.job_id);
@@ -172,8 +170,7 @@ function App() {
         protectedRegions: protectedRegions.map(
           (r) => `${formatTime(r.start)}-${formatTime(r.end)}`,
         ),
-        autoProtect: false,
-        useMert: false,
+        autoProtect: results.auto_protect_requested === true,
         strictLength: results.strict_length_requested === true,
         regenerateSeed: Date.now() % 1000,
       });

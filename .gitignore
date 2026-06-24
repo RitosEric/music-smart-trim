@@ -66,3 +66,6 @@ PUBLISH_INSTRUCTIONS.txt
 # Archive directories
 archive/
 docs/archive/
+
+# Local example audio corpus (large; used as test inputs, not source)
+examples/

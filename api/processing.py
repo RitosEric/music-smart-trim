@@ -34,7 +34,6 @@ def process_audio(
             - target_length: float (seconds)
             - protected_regions: List[str] (MM:SS-MM:SS format)
             - auto_protect: bool
-            - use_mert: bool
             - min_segment_duration: float
             - regenerate_seed: Optional[int]
         progress_callback: Optional callback function(message: str, progress: int)
@@ -62,7 +61,6 @@ def process_audio(
         target_length = params.get('target_length')
         protected_regions = params.get('protected_regions', [])
         auto_protect = params.get('auto_protect', False)
-        use_mert = params.get('use_mert', False)
         min_segment_duration = params.get('min_segment_duration', 10.0)
         regenerate_seed = params.get('regenerate_seed', None)
         strict_length = params.get('strict_length', False)
@@ -80,7 +78,6 @@ def process_audio(
             protected_regions=protected_regions,
             output_dir=output_dir,
             regenerate_seed=regenerate_seed,
-            use_mert=use_mert,
             excluded_strategies=None,
             auto_protect=auto_protect,
             min_segment_duration=min_segment_duration,
@@ -123,6 +120,7 @@ def process_audio(
                 'all_strategy_names': result.get('all_strategy_names', []),
                 'strict_length_requested': result.get('strict_length_requested', False),
                 'strict_length_met': result.get('strict_length_met', False),
+                'auto_protect_requested': auto_protect,
             }
         }
 

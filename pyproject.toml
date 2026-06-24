@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+# Make `src` and `api` importable from the project root (conftest.py also does
+# this; declaring it here keeps the documented setup honest).
+pythonpath = ["."]
+filterwarnings = [
+    # librosa warns when a short edge-slice is handed to an STFT; the scorer
+    # guards these and the result is unaffected.
+    "ignore:n_fft=.*is too large:UserWarning",
+    # madmom 0.16.x imports the deprecated pkg_resources on Python 3.12 before
+    # failing to load; we catch that and fall back to librosa downbeats.
+    "ignore:pkg_resources is deprecated:UserWarning",
+]

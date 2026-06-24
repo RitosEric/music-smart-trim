@@ -36,8 +36,6 @@ export async function processAudio(params) {
     targetLength,
     protectedRegions = [],
     autoProtect = false,
-    useMert = false,
-    minSegmentDuration = 10.0,
     regenerateSeed = null,
     strictLength = false,
   } = params;
@@ -47,8 +45,6 @@ export async function processAudio(params) {
     target_length: targetLength,
     protected_regions: protectedRegions,
     auto_protect: autoProtect,
-    use_mert: useMert,
-    min_segment_duration: minSegmentDuration,
     regenerate_seed: regenerateSeed,
     strict_length: strictLength,
   });

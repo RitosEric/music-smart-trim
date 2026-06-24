@@ -92,11 +92,69 @@ def _stub_pipeline_args():
         structure={'sections': [], 'beat_info': {'downbeats': []}},
         audio_data=None,
         sample_rate=44100,
-        use_mert=False,
         regenerate_seed=None,
         mode='trim',
         min_segment_duration=10.0,
     )
+
+
+def test_strict_retry_escalates_max_cuts_when_trimming():
+    """The deterministic planner can't find new lengths by reseeding, so strict
+    trim retries escalate the cut budget until a within-tolerance plan appears."""
+    initial = [_make_candidate('init', 200.0, star_rating=5.0)]  # 80s off target 120
+    seen_max_cuts = []
+
+    def fake_generate(**kwargs):
+        seen_max_cuts.append(kwargs.get('max_cuts'))
+        # Only a higher cut budget reaches the target here.
+        length = 121.0 if (kwargs.get('max_cuts') or 0) >= 4 else 200.0
+        return [SimpleNamespace(name=f"mc{kwargs.get('max_cuts')}", _length=length)]
+
+    def fake_score(strategy, audio, sr, original_length, rendered, **kwargs):
+        return {
+            'resulting_length': getattr(strategy, '_length', 200.0),
+            'star_rating': 3.0,
+            'total_points': 30.0,
+        }
+
+    with patch('src.cli.generate_strategies', side_effect=fake_generate), \
+         patch('src.output_generator.render_strategy', return_value=None), \
+         patch('src.cli.score_strategy', side_effect=fake_score):
+        strategies, scores, met = retry_for_strict_length(initial, **_stub_pipeline_args())
+
+    assert met is True
+    assert seen_max_cuts == sorted(seen_max_cuts)           # monotonic escalation
+    assert max(c for c in seen_max_cuts if c is not None) >= 4
+
+
+def test_strict_retry_enables_all_repeat_counts_when_extending():
+    """Strict extend retries widen the repeat-count search for finer lengths."""
+    args = _stub_pipeline_args()
+    args['mode'] = 'extend'
+    args['original_length'] = 200.0
+    args['target_length'] = 300.0
+    initial = [_make_candidate('init', 250.0, star_rating=5.0)]  # 50s off (> tolerance)
+    saw_all_repeat_counts = []
+
+    def fake_generate(**kwargs):
+        saw_all_repeat_counts.append(bool(kwargs.get('all_repeat_counts')))
+        length = 295.0 if kwargs.get('all_repeat_counts') else 250.0
+        return [SimpleNamespace(name='ext', _length=length)]
+
+    def fake_score(strategy, audio, sr, original_length, rendered, **kwargs):
+        return {
+            'resulting_length': getattr(strategy, '_length', 250.0),
+            'star_rating': 3.0,
+            'total_points': 30.0,
+        }
+
+    with patch('src.cli.generate_strategies', side_effect=fake_generate), \
+         patch('src.output_generator.render_strategy', return_value=None), \
+         patch('src.cli.score_strategy', side_effect=fake_score):
+        strategies, scores, met = retry_for_strict_length(initial, **args)
+
+    assert met is True
+    assert any(saw_all_repeat_counts)  # at least one batch widened the search
 
 
 def test_retry_returns_compliant_without_regenerating():
@@ -146,7 +204,7 @@ def test_retry_loops_up_to_max_when_all_fail():
     def fake_render(strategy, audio, sr):
         return None
 
-    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False):
+    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False, **kwargs):
         # SimpleNamespace inputs carry _length so we can vary results per strategy.
         length = getattr(strategy, '_length', 200.0)
         return {
@@ -181,7 +239,7 @@ def test_retry_succeeds_mid_loop_returns_compliant():
     retry_round_1 = [SimpleNamespace(name='r1', _length=199.0)]  # still off
     retry_round_2 = [SimpleNamespace(name='r2_good', _length=121.0)]  # compliant
 
-    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False):
+    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False, **kwargs):
         length = getattr(strategy, '_length', 200.0)
         return {
             'resulting_length': length,
@@ -215,7 +273,7 @@ def test_strict_retry_fires_progress_callback_per_retry():
     ]
     captured = []
 
-    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False):
+    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False, **kwargs):
         return {
             'resulting_length': getattr(strategy, '_length', 200.0),
             'star_rating': 2.0,
@@ -254,7 +312,7 @@ def test_quality_retry_fires_progress_callback_per_retry():
     ]
     captured = []
 
-    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False):
+    def fake_score(strategy, audio, sr, original_length, rendered, use_mert=False, **kwargs):
         return {
             'resulting_length': 120.0,
             'star_rating': MIN_ACCEPTABLE_QUALITY - 1.0,

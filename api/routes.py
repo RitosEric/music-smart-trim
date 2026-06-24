@@ -95,7 +95,7 @@ def process_file():
     """
     Start audio processing.
 
-    Request: JSON with job_id, target_length, protected_regions, auto_protect, use_mert
+    Request: JSON with job_id, target_length, protected_regions, auto_protect, strict_length
     Response: JSON with status
     """
     try:
@@ -114,7 +114,6 @@ def process_file():
             'target_length': data.get('target_length'),
             'protected_regions': data.get('protected_regions', []),
             'auto_protect': data.get('auto_protect', False),
-            'use_mert': data.get('use_mert', False),
             'min_segment_duration': data.get('min_segment_duration', 10.0),
             'regenerate_seed': data.get('regenerate_seed', None),
             'strict_length': data.get('strict_length', False),
