@@ -6,6 +6,33 @@ import useTheme from "../hooks/useTheme";
 const COMMITTED_COLOR = "rgba(239, 68, 68, 0.3)"; // red — committed protected region
 const PENDING_COLOR = "rgba(234, 179, 8, 0.35)"; // amber — awaiting confirmation
 
+/** Album-art thumbnail with a brand-gradient music-note fallback. */
+function PlayerCover({ coverUrl, title }) {
+  const [errored, setErrored] = useState(false);
+  if (!coverUrl || errored) {
+    return (
+      <div className="grid h-16 w-16 shrink-0 place-items-center rounded-xl bg-brand-gradient text-white/90 shadow-sm">
+        <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.6}
+            d="M9 19V6l12-3v13M9 19a3 3 0 11-6 0 3 3 0 016 0zm12-3a3 3 0 11-6 0 3 3 0 016 0z"
+          />
+        </svg>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={coverUrl}
+      alt={title ? `Cover for ${title}` : "Album cover"}
+      onError={() => setErrored(true)}
+      className="h-16 w-16 shrink-0 rounded-xl bg-slate-200 object-cover shadow-sm dark:bg-white/10"
+    />
+  );
+}
+
 function WaveformDisplay({
   audioUrl,
   onRegionSelect,
@@ -14,6 +41,9 @@ function WaveformDisplay({
   readOnly = false,
   waveColor = null,
   progressColor = null,
+  coverUrl = null,
+  title = null,
+  playerHeader = false,
 }) {
   const { isDark } = useTheme();
   // Theme-aware defaults; explicit props (e.g. result cards) still win.
@@ -237,6 +267,37 @@ function WaveformDisplay({
 
   return (
     <div className="w-full">
+      {/* Mini player — cover, title, big play button (configure view) */}
+      {playerHeader && (
+        <div className="mb-4 flex items-center gap-4">
+          <PlayerCover coverUrl={coverUrl} title={title} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-display font-semibold text-slate-900 dark:text-white">
+              {title || "Your track"}
+            </p>
+            <p className="mt-0.5 text-sm tabular-nums text-slate-500 dark:text-slate-400">
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </p>
+          </div>
+          <button
+            onClick={togglePlayPause}
+            disabled={loading}
+            aria-label={isPlaying ? "Pause" : "Play"}
+            className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-brand-gradient text-white shadow-lg transition-all duration-200 hover:shadow-glow hover:brightness-105 active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
+          >
+            {isPlaying ? (
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+              </svg>
+            ) : (
+              <svg className="ml-0.5 h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
+          </button>
+        </div>
+      )}
+
       {loading && (
         <div className="flex h-32 items-center justify-center rounded-2xl bg-slate-100/60 dark:bg-white/[0.04]">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-500 dark:border-white/10 dark:border-t-indigo-400"></div>
@@ -247,7 +308,8 @@ function WaveformDisplay({
 
       {!loading && (
         <div className="mt-4 space-y-3">
-          {/* Playback controls */}
+          {/* Playback controls — hidden when the mini player owns play/time */}
+          {!playerHeader && (
           <div className="flex items-center justify-between">
             <button
               onClick={togglePlayPause}
@@ -291,6 +353,7 @@ function WaveformDisplay({
               {formatTime(currentTime)} / {formatTime(duration)}
             </div>
           </div>
+          )}
 
           {/* Region controls — hidden for read-only (result-card) waveforms */}
           {!readOnly && (

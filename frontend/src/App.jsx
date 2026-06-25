@@ -7,12 +7,14 @@ import ResultsDisplay from "./components/ResultsDisplay";
 import RecentList from "./components/RecentList";
 import Logo from "./components/Logo";
 import ThemeToggle from "./components/ThemeToggle";
+import Marquee from "./components/Marquee";
 import {
   processAudio,
   getStatus,
   downloadFile,
   getDownloadUrl,
   deleteJob,
+  loadSample,
 } from "./services/api";
 import useWebSocket from "./hooks/useWebSocket";
 import useTheme from "./hooks/useTheme";
@@ -49,6 +51,9 @@ function App() {
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
   const [recents, setRecents] = useState(() => loadRecents());
+  const [loadingSample, setLoadingSample] = useState(false);
+  const [demoTarget, setDemoTarget] = useState(null);
+  const [demoHint, setDemoHint] = useState(false);
 
   // WebSocket connection
   const { connected, lastMessage, joinJob, leaveJob } = useWebSocket();
@@ -67,8 +72,31 @@ function App() {
   // Handle upload complete
   const handleUploadComplete = (data) => {
     setUploadData(data);
+    setDemoTarget(null);
+    setDemoHint(false);
     setStage("configure");
     setError(null);
+  };
+
+  // Load the demo sample, prefill a 70% trim target, and prompt to Generate.
+  const handleTrySample = async () => {
+    setError(null);
+    setLoadingSample(true);
+    try {
+      const data = await loadSample();
+      setUploadData(data);
+      setProtectedRegions([]);
+      setDemoTarget(data.suggested_target_length ?? null);
+      setDemoHint(true);
+      setStage("configure");
+    } catch (err) {
+      setError(
+        err.response?.data?.error ||
+          "Couldn't load the sample song. Please try again.",
+      );
+    } finally {
+      setLoadingSample(false);
+    }
   };
 
   // Handle region selection
@@ -81,6 +109,7 @@ function App() {
     if (!uploadData) return;
 
     setError(null);
+    setDemoHint(false);
     setProcessing(true);
     setStage("processing");
     setProcessingProgress(0);
@@ -214,6 +243,8 @@ function App() {
     setProcessing(false);
     setResults(null);
     setError(null);
+    setDemoTarget(null);
+    setDemoHint(false);
   };
 
   // Jump back to configure from results (e.g. to reconfigure protected regions
@@ -239,6 +270,10 @@ function App() {
     setProtectedRegions([]);
     setResults(entry.result);
     setError(null);
+    // Clear demo prefill/hint so a sample run can't leak its 70% target into a
+    // recent upload reopened via "Back to Configure".
+    setDemoTarget(null);
+    setDemoHint(false);
     setStage("results");
   };
 
@@ -326,6 +361,45 @@ function App() {
                 length.
               </p>
               <AudioUploader onUploadComplete={handleUploadComplete} />
+
+              {/* Always-available demo entry point. If the sample file isn't
+                  present, handleTrySample surfaces a friendly error. */}
+              <div className="mt-6">
+                <div className="flex items-center gap-3">
+                  <span className="h-px flex-1 bg-slate-300/60 dark:bg-white/10" />
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                    or
+                  </span>
+                  <span className="h-px flex-1 bg-slate-300/60 dark:bg-white/10" />
+                </div>
+                <button
+                  onClick={handleTrySample}
+                  disabled={loadingSample}
+                  className="btn-ghost mt-4 w-full"
+                >
+                  {loadingSample ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      Loading sample…
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="h-5 w-5 text-indigo-500 dark:text-indigo-400"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                      Try our sample song
+                    </>
+                  )}
+                </button>
+                <p className="mt-2 text-center text-xs text-slate-400 dark:text-slate-500">
+                  No file handy? Preview a finished trim in a few seconds.
+                </p>
+              </div>
             </div>
             <RecentList
               recents={recents}
@@ -339,19 +413,26 @@ function App() {
         {stage === "configure" && uploadData && (
           <div className="animate-fade-up space-y-6">
             <div className="glass-panel p-6">
-              <h2 className="mb-4 font-display text-xl font-semibold text-slate-900 dark:text-white">
-                Audio Waveform
-              </h2>
               <WaveformDisplay
                 audioUrl={getDownloadUrl(uploadData.job_id, uploadData.filename)}
                 onRegionSelect={handleRegionSelect}
                 protectedRegions={protectedRegions}
+                playerHeader
+                title={uploadData.display_name || uploadData.filename}
+                coverUrl={
+                  uploadData.cover_filename
+                    ? getDownloadUrl(uploadData.job_id, uploadData.cover_filename)
+                    : null
+                }
               />
             </div>
             <ControlPanel
               originalLength={uploadData.original_length}
               protectedRegions={protectedRegions}
               onProcess={handleProcess}
+              initialTargetLength={demoTarget}
+              showGeneratePrompt={demoHint}
+              onDismissPrompt={() => setDemoHint(false)}
             />
           </div>
         )}
@@ -379,6 +460,14 @@ function App() {
               strictLengthRequested={results.strict_length_requested === true}
               strictLengthMet={results.strict_length_met === true}
             />
+          </div>
+        )}
+
+        {/* Brand marquee — shown on every stage except the transient
+            processing screen (front page, configure, and results). */}
+        {stage !== "processing" && (
+          <div className="mt-6 animate-fade-up">
+            <Marquee />
           </div>
         )}
       </main>

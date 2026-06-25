@@ -1,6 +1,7 @@
 # api/routes.py
 """API routes for Music Smart Trim."""
 import os
+import shutil
 import sys
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file
@@ -25,6 +26,70 @@ api = Blueprint('api', __name__, url_prefix='/api')
 
 # In-memory job status storage (use Redis in production)
 job_status = {}
+
+# Bundled demo sample. Resolved relative to the repo root (not the process CWD)
+# so it works no matter where the server is started; override with SAMPLE_SONG.
+# examples/ is gitignored, so on a fresh clone the POST returns 404 and the
+# frontend surfaces a friendly error (the button itself always stays visible).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SAMPLE_SONG_PATH = os.environ.get(
+    'SAMPLE_SONG',
+    str(_PROJECT_ROOT / 'examples' / 'One Direction - What Makes You Beautiful.mp3'),
+)
+SAMPLE_TRIM_RATIO = 0.7  # the demo trims to 70% of the original length
+
+
+def _sample_file():
+    """Return the sample audio Path if it exists, else None."""
+    p = Path(SAMPLE_SONG_PATH)
+    return p if p.is_file() else None
+
+
+@api.route('/sample', methods=['POST'])
+def load_sample():
+    """Load the bundled demo sample into a fresh job — same payload as /upload,
+    plus `is_sample` and a suggested 70% trim target."""
+    p = _sample_file()
+    if p is None:
+        return jsonify({'error': 'Sample song is not available'}), 404
+
+    job_id = generate_job_id()
+    job_dir = get_job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    safe_filename = secure_filename(p.name)
+    dest = job_dir / safe_filename
+    shutil.copyfile(p, dest)
+
+    try:
+        audio_data, sample_rate = load_audio(str(dest))
+        original_length = len(audio_data) / sample_rate
+    except AudioLoadError as e:
+        cleanup_job(job_id)
+        return jsonify({'error': f'Invalid sample file: {str(e)}'}), 500
+
+    cover_filename = extract_cover_art(str(dest), job_dir)
+    display_name = extract_display_name(str(dest), fallback=p.stem)
+    suggested_target = round(original_length * SAMPLE_TRIM_RATIO)
+
+    job_status[job_id] = {
+        'status': 'uploaded',
+        'filename': safe_filename,
+        'display_name': display_name,
+        'original_length': original_length,
+        'progress': 0,
+        'message': 'Sample loaded',
+        'cover_filename': cover_filename,
+    }
+
+    return jsonify({
+        'job_id': job_id,
+        'filename': safe_filename,
+        'display_name': display_name,
+        'original_length': original_length,
+        'cover_filename': cover_filename,
+        'is_sample': True,
+        'suggested_target_length': suggested_target,
+    }), 200
 
 
 @api.route('/upload', methods=['POST'])

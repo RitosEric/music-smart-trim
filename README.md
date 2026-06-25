@@ -74,6 +74,11 @@ download the result. Toggles let you protect the intro/outro or enforce the
 strict ±15s length, and a light/dark switch lives in the top-right corner. The
 interface uses a frosted "liquid glass" style and remembers your theme choice.
 
+Don't have a file handy? The upload screen has a **Try our sample song** button
+that loads a bundled track and pre-fills a 70% trim so you can preview a result
+in seconds. It looks for a sample in `examples/` (override with the `SAMPLE_SONG`
+env var); if none is present it shows a brief notice.
+
 ## How it works
 
 1. **Analyze** — extract chroma, detect beats and downbeats, and split the song

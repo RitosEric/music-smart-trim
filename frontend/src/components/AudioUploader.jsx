@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { uploadFile } from "../services/api";
 import { formatFileSize } from "../utils/formatters";
+import FakeWaveform from "./FakeWaveform";
 
 function AudioUploader({ onUploadComplete, disabled = false }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -103,7 +104,7 @@ function AudioUploader({ onUploadComplete, disabled = false }) {
           transition-all duration-200 ease-out
           ${
             isDragging
-              ? "scale-[1.01] border-indigo-400 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/10"
+              ? "scale-[1.01] border-indigo-400 bg-indigo-50/70 shadow-glow dark:border-indigo-400 dark:bg-indigo-500/10"
               : "border-slate-300/80 bg-white/30 dark:border-white/15 dark:bg-white/[0.03]"
           }
           ${
@@ -144,22 +145,9 @@ function AudioUploader({ onUploadComplete, disabled = false }) {
           </div>
         ) : (
           <>
-            <span className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-brand-gradient text-white shadow-lg transition-transform duration-200 group-hover:scale-105">
-              <svg
-                className="h-8 w-8"
-                stroke="currentColor"
-                fill="none"
-                strokeWidth="2"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"
-                />
-              </svg>
-            </span>
+            <div className="mx-auto mb-5 w-full max-w-xs">
+              <FakeWaveform active={isDragging} />
+            </div>
             <p className="mb-1 text-lg text-slate-700 dark:text-slate-200">
               <span className="font-semibold text-indigo-600 dark:text-indigo-400">
                 Click to upload

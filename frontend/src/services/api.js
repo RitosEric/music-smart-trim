@@ -61,6 +61,15 @@ export async function getStatus(jobId) {
 }
 
 /**
+ * Load the demo sample into a fresh job. Returns the same shape as upload,
+ * plus `is_sample` and `suggested_target_length` (a 70% trim).
+ */
+export async function loadSample() {
+  const response = await api.post("/sample");
+  return response.data;
+}
+
+/**
  * Get download URL for processed file.
  */
 export function getDownloadUrl(jobId, filename) {

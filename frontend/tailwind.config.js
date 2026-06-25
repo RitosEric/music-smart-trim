@@ -41,11 +41,21 @@ module.exports = {
           "0%": { opacity: "0", transform: "translateY(14px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        "bar-pulse": {
+          "0%, 100%": { transform: "scaleY(0.4)" },
+          "50%": { transform: "scaleY(1)" },
+        },
+        marquee: {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(-50%)" },
+        },
       },
       animation: {
         float: "float 16s ease-in-out infinite",
         shimmer: "shimmer 1.8s infinite",
         "fade-up": "fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both",
+        "bar-pulse": "bar-pulse 1.4s ease-in-out infinite",
+        marquee: "marquee 28s linear infinite",
       },
     },
   },

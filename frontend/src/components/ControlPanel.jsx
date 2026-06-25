@@ -6,12 +6,24 @@ function ControlPanel({
   onProcess,
   protectedRegions = [],
   disabled = false,
+  initialTargetLength = null,
+  showGeneratePrompt = false,
+  onDismissPrompt,
 }) {
-  const [targetLength, setTargetLength] = useState("");
+  const [targetLength, setTargetLength] = useState(
+    initialTargetLength != null ? String(initialTargetLength) : "",
+  );
   const [autoProtect, setAutoProtect] = useState(false);
   const [strictLength, setStrictLength] = useState(false);
   const [mode, setMode] = useState(null);
   const [error, setError] = useState(null);
+
+  // Prefill the target when provided (e.g. the demo's 70% trim).
+  useEffect(() => {
+    if (initialTargetLength != null) {
+      setTargetLength(String(initialTargetLength));
+    }
+  }, [initialTargetLength]);
 
   // Determine mode based on target length
   useEffect(() => {
@@ -214,17 +226,58 @@ function ControlPanel({
           const overProtected =
             mode === "trim" && !isNaN(target) && protectedTotal > target;
           return (
-            <button
-              type="submit"
-              disabled={disabled || !targetLength || !mode || overProtected}
-              className="btn-primary w-full"
-            >
-              {disabled
-                ? "Processing…"
-                : overProtected
-                  ? "Protected regions exceed target"
-                  : `Start Processing${mode ? ` · ${mode === "trim" ? "Trim" : "Extend"}` : ""}`}
-            </button>
+            <div className="relative">
+              {/* Demo coach-mark pointing at Generate (dismissable). The
+                  positioning transform (outer) is kept separate from the
+                  entrance animation (inner) so they don't clobber each other. */}
+              {showGeneratePrompt && (
+                <div className="absolute -top-3 left-1/2 z-20 w-72 max-w-[88vw] -translate-x-1/2 -translate-y-full">
+                  <div className="animate-fade-up">
+                    <div className="relative rounded-2xl border border-white/60 bg-white/95 p-4 pr-9 text-left shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-[#10101e]/95">
+                      <button
+                        type="button"
+                        onClick={onDismissPrompt}
+                        aria-label="Dismiss tip"
+                        className="absolute right-2 top-2 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-500/10 hover:text-slate-700 dark:hover:text-slate-200"
+                      >
+                        <svg
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                        Your sample is ready
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        We set a target length for you (a 70% trim). Click
+                        Generate to hear the result.
+                      </p>
+                    </div>
+                    <div className="mx-auto -mt-1.5 h-3 w-3 rotate-45 border-b border-r border-white/60 bg-white/95 dark:border-white/10 dark:bg-[#10101e]" />
+                  </div>
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={disabled || !targetLength || !mode || overProtected}
+                className="btn-primary w-full"
+              >
+                {disabled
+                  ? "Processing…"
+                  : overProtected
+                    ? "Protected regions exceed target"
+                    : `Generate${mode ? ` · ${mode === "trim" ? "Trim" : "Extend"}` : ""}`}
+              </button>
+            </div>
           );
         })()}
       </form>
