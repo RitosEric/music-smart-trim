@@ -36,7 +36,7 @@ SAMPLE_SONG_PATH = os.environ.get(
     'SAMPLE_SONG',
     str(_PROJECT_ROOT / 'examples' / 'One Direction - What Makes You Beautiful.mp3'),
 )
-SAMPLE_TRIM_RATIO = 0.7  # the demo trims to 70% of the original length
+SAMPLE_TARGET_SECONDS = 60  # the demo pre-fills a fixed 60s strict-length trim
 
 
 def _sample_file():
@@ -48,7 +48,7 @@ def _sample_file():
 @api.route('/sample', methods=['POST'])
 def load_sample():
     """Load the bundled demo sample into a fresh job — same payload as /upload,
-    plus `is_sample` and a suggested 70% trim target."""
+    plus `is_sample` and a suggested 60-second trim target."""
     p = _sample_file()
     if p is None:
         return jsonify({'error': 'Sample song is not available'}), 404
@@ -69,7 +69,7 @@ def load_sample():
 
     cover_filename = extract_cover_art(str(dest), job_dir)
     display_name = extract_display_name(str(dest), fallback=p.stem)
-    suggested_target = round(original_length * SAMPLE_TRIM_RATIO)
+    suggested_target = min(SAMPLE_TARGET_SECONDS, round(original_length))
 
     job_status[job_id] = {
         'status': 'uploaded',

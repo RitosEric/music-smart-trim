@@ -7,6 +7,7 @@ function ControlPanel({
   protectedRegions = [],
   disabled = false,
   initialTargetLength = null,
+  initialStrictLength = false,
   showGeneratePrompt = false,
   onDismissPrompt,
 }) {
@@ -14,16 +15,23 @@ function ControlPanel({
     initialTargetLength != null ? String(initialTargetLength) : "",
   );
   const [autoProtect, setAutoProtect] = useState(false);
-  const [strictLength, setStrictLength] = useState(false);
+  const [strictLength, setStrictLength] = useState(initialStrictLength);
   const [mode, setMode] = useState(null);
   const [error, setError] = useState(null);
 
-  // Prefill the target when provided (e.g. the demo's 70% trim).
+  // Prefill the target when provided (e.g. the demo's 60s trim).
   useEffect(() => {
     if (initialTargetLength != null) {
       setTargetLength(String(initialTargetLength));
     }
   }, [initialTargetLength]);
+
+  // Pre-enable strict length when requested (the demo turns it on).
+  useEffect(() => {
+    if (initialStrictLength) {
+      setStrictLength(true);
+    }
+  }, [initialStrictLength]);
 
   // Determine mode based on target length
   useEffect(() => {
@@ -258,8 +266,8 @@ function ControlPanel({
                         Your sample is ready
                       </p>
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        We set a target length for you (a 70% trim). Click
-                        Generate to hear the result.
+                        We set a target length and switched on strict length so
+                        the result lands close to it. Click Generate to hear it.
                       </p>
                     </div>
                     <div className="mx-auto -mt-1.5 h-3 w-3 rotate-45 border-b border-r border-white/60 bg-white/95 dark:border-white/10 dark:bg-[#10101e]" />

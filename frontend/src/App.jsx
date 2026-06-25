@@ -54,6 +54,7 @@ function App() {
   const [loadingSample, setLoadingSample] = useState(false);
   const [demoTarget, setDemoTarget] = useState(null);
   const [demoHint, setDemoHint] = useState(false);
+  const [demoStrict, setDemoStrict] = useState(false);
 
   // WebSocket connection
   const { connected, lastMessage, joinJob, leaveJob } = useWebSocket();
@@ -74,6 +75,7 @@ function App() {
     setUploadData(data);
     setDemoTarget(null);
     setDemoHint(false);
+    setDemoStrict(false);
     setStage("configure");
     setError(null);
   };
@@ -87,6 +89,7 @@ function App() {
       setUploadData(data);
       setProtectedRegions([]);
       setDemoTarget(data.suggested_target_length ?? null);
+      setDemoStrict(true);
       setDemoHint(true);
       setStage("configure");
     } catch (err) {
@@ -245,6 +248,7 @@ function App() {
     setError(null);
     setDemoTarget(null);
     setDemoHint(false);
+    setDemoStrict(false);
   };
 
   // Jump back to configure from results (e.g. to reconfigure protected regions
@@ -274,6 +278,7 @@ function App() {
     // recent upload reopened via "Back to Configure".
     setDemoTarget(null);
     setDemoHint(false);
+    setDemoStrict(false);
     setStage("results");
   };
 
@@ -431,6 +436,7 @@ function App() {
               protectedRegions={protectedRegions}
               onProcess={handleProcess}
               initialTargetLength={demoTarget}
+              initialStrictLength={demoStrict}
               showGeneratePrompt={demoHint}
               onDismissPrompt={() => setDemoHint(false)}
             />
